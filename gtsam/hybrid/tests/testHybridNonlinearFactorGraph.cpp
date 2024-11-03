@@ -34,7 +34,6 @@
 #include <gtsam/slam/BetweenFactor.h>
 
 #include "Switching.h"
-#include "Test.h"
 
 // Include for test suite
 #include <CppUnitLite/TestHarness.h>
@@ -210,6 +209,37 @@ TEST(HybridNonlinearFactorGraph, PushBack) {
   // hnfg.push_back(factors.begin(), factors.end());
 
   // EXPECT_LONGS_EQUAL(3, hnfg.size());
+}
+
+/* ****************************************************************************/
+// Test hybrid nonlinear factor graph errorTree
+TEST(HybridNonlinearFactorGraph, ErrorTree) {
+  Switching s(3);
+
+  HybridNonlinearFactorGraph graph = s.nonlinearFactorGraph;
+  Values values = s.linearizationPoint;
+
+  auto error_tree = graph.errorTree(s.linearizationPoint);
+
+  auto dkeys = graph.discreteKeys();
+  DiscreteKeys discrete_keys(dkeys.begin(), dkeys.end());
+
+  // Compute the sum of errors for each factor.
+  auto assignments = DiscreteValues::CartesianProduct(discrete_keys);
+  std::vector<double> leaves(assignments.size());
+  for (auto &&factor : graph) {
+    for (size_t i = 0; i < assignments.size(); ++i) {
+      leaves[i] +=
+          factor->error(HybridValues(VectorValues(), assignments[i], values));
+    }
+  }
+  // Swap i=1 and i=2 to give correct ordering.
+  double temp = leaves[1];
+  leaves[1] = leaves[2];
+  leaves[2] = temp;
+  AlgebraicDecisionTree<Key> expected_error(discrete_keys, leaves);
+
+  EXPECT(assert_equal(expected_error, error_tree, 1e-7));
 }
 
 /****************************************************************************
@@ -499,7 +529,7 @@ TEST(HybridNonlinearFactorGraph, Full_Elimination) {
 /****************************************************************************
  * Test printing
  */
-TEST_DISABLED(HybridNonlinearFactorGraph, Printing) {
+TEST(HybridNonlinearFactorGraph, Printing) {
   Switching self(3);
 
   auto linearizedFactorGraph = self.linearizedFactorGraph;
@@ -519,7 +549,7 @@ Factor 0
 GaussianFactor:
 
   A[x0] = [
-        10
+	10
 ]
   b = [ -10 ]
   No noise model
@@ -530,25 +560,25 @@ Hybrid [x0 x1; m0]{
  Choice(m0) 
  0 Leaf :
   A[x0] = [
-        -1
+	-1
 ]
   A[x1] = [
-        1
+	1
 ]
   b = [ -1 ]
   No noise model
-scalar: 0
+scalar: 0.918939
 
  1 Leaf :
   A[x0] = [
-        -1
+	-1
 ]
   A[x1] = [
-        1
+	1
 ]
   b = [ -0 ]
   No noise model
-scalar: 0
+scalar: 0.918939
 
 }
 
@@ -558,25 +588,25 @@ Hybrid [x1 x2; m1]{
  Choice(m1) 
  0 Leaf :
   A[x1] = [
-        -1
+	-1
 ]
   A[x2] = [
-        1
+	1
 ]
   b = [ -1 ]
   No noise model
-scalar: 0
+scalar: 0.918939
 
  1 Leaf :
   A[x1] = [
-        -1
+	-1
 ]
   A[x2] = [
-        1
+	1
 ]
   b = [ -0 ]
   No noise model
-scalar: 0
+scalar: 0.918939
 
 }
 
@@ -584,7 +614,7 @@ Factor 3
 GaussianFactor:
 
   A[x1] = [
-        10
+	10
 ]
   b = [ -10 ]
   No noise model
@@ -593,7 +623,7 @@ Factor 4
 GaussianFactor:
 
   A[x2] = [
-        10
+	10
 ]
   b = [ -10 ]
   No noise model
@@ -942,8 +972,6 @@ TEST(HybridNonlinearFactorGraph, DifferentMeans) {
     DiscreteValues dv0{{M(1), 0}};
     VectorValues cont0 = bn->optimize(dv0);
     double error0 = bn->error(HybridValues(cont0, dv0));
-
-    // TODO(Varun) Perform importance sampling to estimate error?
 
     // regression
     EXPECT_DOUBLES_EQUAL(0.69314718056, error0, 1e-9);

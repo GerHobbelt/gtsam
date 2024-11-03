@@ -24,7 +24,6 @@
 #include <gtsam/discrete/DecisionTree.h>
 #include <gtsam/discrete/DecisionTreeFactor.h>
 #include <gtsam/discrete/DiscreteKey.h>
-#include <gtsam/hybrid/HybridGaussianProductFactor.h>
 #include <gtsam/hybrid/HybridFactor.h>
 #include <gtsam/hybrid/HybridGaussianFactor.h>
 #include <gtsam/inference/Conditional.h>
@@ -221,9 +220,6 @@ class GTSAM_EXPORT HybridGaussianConditional
    */
   HybridGaussianConditional::shared_ptr prune(
       const DecisionTreeFactor &discreteProbs) const;
-
-  /// Convert to a DecisionTree of Gaussian factor graphs.
-  HybridGaussianProductFactor asProductFactor() const override;
 
   /// @}
 

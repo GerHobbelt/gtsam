@@ -22,16 +22,19 @@
 #include <gtsam/inference/Key.h>
 #include <gtsam/linear/GaussianFactorGraph.h>
 
+#include <iostream>
+
 namespace gtsam {
 
 class HybridGaussianFactor;
 
+using GaussianFactorGraphValuePair = std::pair<GaussianFactorGraph, double>;
+
 /// Alias for DecisionTree of GaussianFactorGraphs and their scalar sums
-class HybridGaussianProductFactor
-    : public DecisionTree<Key, std::pair<GaussianFactorGraph, double>> {
+class GTSAM_EXPORT HybridGaussianProductFactor
+    : public DecisionTree<Key, GaussianFactorGraphValuePair> {
  public:
-  using Y = std::pair<GaussianFactorGraph, double>;
-  using Base = DecisionTree<Key, Y>;
+  using Base = DecisionTree<Key, GaussianFactorGraphValuePair>;
 
   /// @name Constructors
   /// @{
@@ -46,7 +49,7 @@ class HybridGaussianProductFactor
    */
   template <class FACTOR>
   HybridGaussianProductFactor(const std::shared_ptr<FACTOR>& factor)
-      : Base(Y{GaussianFactorGraph{factor}, 0.0}) {}
+      : Base(GaussianFactorGraphValuePair{GaussianFactorGraph{factor}, 0.0}) {}
 
   /**
    * @brief Construct from DecisionTree
@@ -60,13 +63,16 @@ class HybridGaussianProductFactor
   ///@{
 
   /// Add GaussianFactor into HybridGaussianProductFactor
-  HybridGaussianProductFactor operator+(const GaussianFactor::shared_ptr& factor) const;
+  HybridGaussianProductFactor operator+(
+      const GaussianFactor::shared_ptr& factor) const;
 
   /// Add HybridGaussianFactor into HybridGaussianProductFactor
-  HybridGaussianProductFactor operator+(const HybridGaussianFactor& factor) const;
+  HybridGaussianProductFactor operator+(
+      const HybridGaussianFactor& factor) const;
 
   /// Add-assign operator for GaussianFactor
-  HybridGaussianProductFactor& operator+=(const GaussianFactor::shared_ptr& factor);
+  HybridGaussianProductFactor& operator+=(
+      const GaussianFactor::shared_ptr& factor);
 
   /// Add-assign operator for HybridGaussianFactor
   HybridGaussianProductFactor& operator+=(const HybridGaussianFactor& factor);
@@ -81,7 +87,8 @@ class HybridGaussianProductFactor
    * @param s Optional string to prepend
    * @param formatter Optional key formatter
    */
-  void print(const std::string& s = "", const KeyFormatter& formatter = DefaultKeyFormatter) const;
+  void print(const std::string& s = "",
+             const KeyFormatter& formatter = DefaultKeyFormatter) const;
 
   /**
    * @brief Check if this HybridGaussianProductFactor is equal to another
@@ -89,11 +96,8 @@ class HybridGaussianProductFactor
    * @param tol Tolerance for floating point comparisons
    * @return true if equal, false otherwise
    */
-  bool equals(const HybridGaussianProductFactor& other, double tol = 1e-9) const {
-    return Base::equals(other, [tol](const Y& a, const Y& b) {
-      return a.first.equals(b.first, tol) && std::abs(a.second - b.second) < tol;
-    });
-  }
+  bool equals(const HybridGaussianProductFactor& other,
+              double tol = 1e-9) const;
 
   /// @}
 
@@ -102,20 +106,42 @@ class HybridGaussianProductFactor
 
   /**
    * @brief Remove empty GaussianFactorGraphs from the decision tree
-   * @return A new HybridGaussianProductFactor with empty GaussianFactorGraphs removed
+   * @return A new HybridGaussianProductFactor with empty GaussianFactorGraphs
+   * removed
    *
    * If any GaussianFactorGraph in the decision tree contains a nullptr, convert
-   * that leaf to an empty GaussianFactorGraph with zero scalar sum. This is needed because the
-   * DecisionTree will otherwise create a GaussianFactorGraph with a single (null) factor, which
-   * doesn't register as null.
+   * that leaf to an empty GaussianFactorGraph with zero scalar sum. This is
+   * needed because the DecisionTree will otherwise create a GaussianFactorGraph
+   * with a single (null) factor, which doesn't register as null.
    */
   HybridGaussianProductFactor removeEmpty() const;
 
   ///@}
+
+ private:
+#ifdef GTSAM_ENABLE_BOOST_SERIALIZATION
+  /** Serialization function */
+  friend class boost::serialization::access;
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int /*version*/) {
+    ar& BOOST_SERIALIZATION_BASE_OBJECT_NVP(Base);
+  }
+#endif
 };
 
 // Testable traits
 template <>
-struct traits<HybridGaussianProductFactor> : public Testable<HybridGaussianProductFactor> {};
+struct traits<HybridGaussianProductFactor>
+    : public Testable<HybridGaussianProductFactor> {};
+
+/**
+ * Create a dummy overload of >> for GaussianFactorGraphValuePair
+ * so that HybridGaussianProductFactor compiles
+ * with the constructor
+ * `DecisionTree(const std::vector<LabelC>& labelCs, const std::string& table)`.
+ *
+ * Needed to compile on Windows.
+ */
+std::istream& operator>>(std::istream& is, GaussianFactorGraphValuePair& pair);
 
 }  // namespace gtsam

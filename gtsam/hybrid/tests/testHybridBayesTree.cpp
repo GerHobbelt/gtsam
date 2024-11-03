@@ -22,6 +22,8 @@
 #include <gtsam/hybrid/HybridGaussianISAM.h>
 #include <gtsam/inference/DotWriter.h>
 
+#include <numeric>
+
 #include "Switching.h"
 
 // Include for test suite
@@ -59,10 +61,11 @@ std::vector<GaussianFactor::shared_ptr> components(Key key) {
   return {std::make_shared<JacobianFactor>(key, I_3x3, Z_3x1),
           std::make_shared<JacobianFactor>(key, I_3x3, Vector3::Ones())};
 }
-} // namespace two
+}  // namespace two
 
 /* ************************************************************************* */
-TEST(HybridGaussianFactorGraph, eliminateFullMultifrontalSimple) {
+TEST(HybridGaussianFactorGraph,
+     HybridGaussianFactorGraphEliminateFullMultifrontalSimple) {
   HybridGaussianFactorGraph hfg;
 
   hfg.add(JacobianFactor(X(0), I_3x3, Z_3x1));
@@ -142,9 +145,9 @@ TEST(HybridGaussianFactorGraph, eliminateFullMultifrontalTwoClique) {
 }
 
 /* ************************************************************************* */
-void dotPrint(const HybridGaussianFactorGraph::shared_ptr &hfg,
-              const HybridBayesTree::shared_ptr &hbt,
-              const Ordering &ordering) {
+void dotPrint(const HybridGaussianFactorGraph::shared_ptr& hfg,
+              const HybridBayesTree::shared_ptr& hbt,
+              const Ordering& ordering) {
   DotWriter dw;
   dw.positionHints['c'] = 2;
   dw.positionHints['x'] = 1;
@@ -185,7 +188,7 @@ TEST(HybridGaussianFactorGraph, Switching) {
     auto [ndX, lvls] = makeBinaryOrdering(ordX);
     std::copy(ndX.begin(), ndX.end(), std::back_inserter(ordering));
     // TODO(dellaert): this has no effect!
-    for (auto &l : lvls) {
+    for (auto& l : lvls) {
       l = -l;
     }
   }
@@ -239,7 +242,7 @@ TEST(HybridGaussianFactorGraph, SwitchingISAM) {
     auto [ndX, lvls] = makeBinaryOrdering(ordX);
     std::copy(ndX.begin(), ndX.end(), std::back_inserter(ordering));
     // TODO(dellaert): this has no effect!
-    for (auto &l : lvls) {
+    for (auto& l : lvls) {
       l = -l;
     }
   }
@@ -408,8 +411,7 @@ TEST(HybridBayesTree, OptimizeAssignment) {
 
   // Create ordering.
   Ordering ordering;
-  for (size_t k = 0; k < s.K; k++)
-    ordering.push_back(X(k));
+  for (size_t k = 0; k < s.K; k++) ordering.push_back(X(k));
 
   const auto [hybridBayesNet, remainingFactorGraph] =
       s.linearizedFactorGraph.eliminatePartialSequential(ordering);
@@ -451,21 +453,20 @@ TEST(HybridBayesTree, Optimize) {
 
   // Create ordering.
   Ordering ordering;
-  for (size_t k = 0; k < s.K; k++)
-    ordering.push_back(X(k));
+  for (size_t k = 0; k < s.K; k++) ordering.push_back(X(k));
 
   const auto [hybridBayesNet, remainingFactorGraph] =
       s.linearizedFactorGraph.eliminatePartialSequential(ordering);
 
   DiscreteFactorGraph dfg;
-  for (auto &&f : *remainingFactorGraph) {
+  for (auto&& f : *remainingFactorGraph) {
     auto discreteFactor = dynamic_pointer_cast<DiscreteFactor>(f);
     assert(discreteFactor);
     dfg.push_back(discreteFactor);
   }
 
   // Add the probabilities for each branch
-  DiscreteKeys discrete_keys = {m0, m1, m2};
+  DiscreteKeys discrete_keys = {{M(0), 2}, {M(1), 2}, {M(2), 2}};
   vector<double> probs = {0.012519475, 0.041280228, 0.075018647, 0.081663656,
                           0.037152205, 0.12248971,  0.07349729,  0.08};
   dfg.emplace_shared<DecisionTreeFactor>(discrete_keys, probs);
