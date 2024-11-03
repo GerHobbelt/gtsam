@@ -126,6 +126,11 @@ class GTSAM_EXPORT HybridGaussianFactorGraph
   /// @brief Default constructor.
   HybridGaussianFactorGraph() = default;
 
+  /** Construct from container of factors (shared_ptr or plain objects) */
+  template <class CONTAINER>
+  explicit HybridGaussianFactorGraph(const CONTAINER& factors)
+      : Base(factors) {}
+
   /**
    * Implicit copy/downcast constructor to override explicit template container
    * constructor. In BayesTree this is used for:
@@ -144,6 +149,14 @@ class GTSAM_EXPORT HybridGaussianFactorGraph
   //     const std::string& s = "HybridGaussianFactorGraph",
   //     const KeyFormatter& keyFormatter = DefaultKeyFormatter) const override;
 
+  /**
+   * @brief Print the errors of each factor in the hybrid factor graph.
+   *
+   * @param values The HybridValues for the variables used to compute the error.
+   * @param str String that is output before the factor graph and errors.
+   * @param keyFormatter Formatter function for the keys in the factors.
+   * @param printCondition A condition to check if a factor should be printed.
+   */
   void printErrors(
       const HybridValues& values,
       const std::string& str = "HybridGaussianFactorGraph: ",
@@ -205,6 +218,10 @@ class GTSAM_EXPORT HybridGaussianFactorGraph
   GaussianFactorGraphTree assembleGraphTree() const;
 
   /// @}
+
+  /// Get the GaussianFactorGraph at a given discrete assignment.
+  GaussianFactorGraph operator()(const DiscreteValues& assignment) const;
+
 };
 
 }  // namespace gtsam
