@@ -51,7 +51,7 @@ using symbol_shorthand::X;
  * Test that any linearizedFactorGraph gaussian factors are appended to the
  * existing gaussian factor graph in the hybrid factor graph.
  */
-TEST(HybridFactorGraph, GaussianFactorGraph) {
+TEST(HybridNonlinearFactorGraph, GaussianFactorGraph) {
   HybridNonlinearFactorGraph fg;
 
   // Add a simple prior factor to the nonlinear factor graph
@@ -115,35 +115,40 @@ TEST(HybridNonlinearFactorGraph, Resize) {
   EXPECT_LONGS_EQUAL(fg.size(), 0);
 }
 
+/***************************************************************************/
+namespace test_motion {
+KeyVector contKeys = {X(0), X(1)};
+gtsam::DiscreteKey m1(M(1), 2);
+auto noise_model = noiseModel::Isotropic::Sigma(1, 1.0);
+std::vector<NonlinearFactor::shared_ptr> components = {
+    std::make_shared<MotionModel>(X(0), X(1), 0.0, noise_model),
+    std::make_shared<MotionModel>(X(0), X(1), 1.0, noise_model)};
+}  // namespace test_motion
+
 /***************************************************************************
  * Test that the resize method works correctly for a
  * HybridGaussianFactorGraph.
  */
 TEST(HybridGaussianFactorGraph, Resize) {
-  HybridNonlinearFactorGraph nhfg;
+  using namespace test_motion;
+
+  HybridNonlinearFactorGraph hnfg;
   auto nonlinearFactor = std::make_shared<BetweenFactor<double>>(
       X(0), X(1), 0.0, Isotropic::Sigma(1, 0.1));
-  nhfg.push_back(nonlinearFactor);
+  hnfg.push_back(nonlinearFactor);
   auto discreteFactor = std::make_shared<DecisionTreeFactor>();
-  nhfg.push_back(discreteFactor);
+  hnfg.push_back(discreteFactor);
 
-  KeyVector contKeys = {X(0), X(1)};
-  auto noise_model = noiseModel::Isotropic::Sigma(1, 1.0);
-  auto still = std::make_shared<MotionModel>(X(0), X(1), 0.0, noise_model),
-       moving = std::make_shared<MotionModel>(X(0), X(1), 1.0, noise_model);
-
-  std::vector<std::pair<MotionModel::shared_ptr, double>> components = {
-      {still, 0.0}, {moving, 0.0}};
-  auto dcFactor = std::make_shared<HybridNonlinearFactor>(
-      contKeys, gtsam::DiscreteKey(M(1), 2), components);
-  nhfg.push_back(dcFactor);
+  auto dcFactor =
+      std::make_shared<HybridNonlinearFactor>(contKeys, m1, components);
+  hnfg.push_back(dcFactor);
 
   Values linearizationPoint;
   linearizationPoint.insert<double>(X(0), 0);
   linearizationPoint.insert<double>(X(1), 1);
 
   // Generate `HybridGaussianFactorGraph` by linearizing
-  HybridGaussianFactorGraph gfg = *nhfg.linearize(linearizationPoint);
+  HybridGaussianFactorGraph gfg = *hnfg.linearize(linearizationPoint);
 
   EXPECT_LONGS_EQUAL(gfg.size(), 3);
 
@@ -156,32 +161,25 @@ TEST(HybridGaussianFactorGraph, Resize) {
  * continuous keys provided do not match the keys in the factors.
  */
 TEST(HybridGaussianFactorGraph, HybridNonlinearFactor) {
+  using namespace test_motion;
+
   auto nonlinearFactor = std::make_shared<BetweenFactor<double>>(
       X(0), X(1), 0.0, Isotropic::Sigma(1, 0.1));
   auto discreteFactor = std::make_shared<DecisionTreeFactor>();
 
-  auto noise_model = noiseModel::Isotropic::Sigma(1, 1.0);
-  auto still = std::make_shared<MotionModel>(X(0), X(1), 0.0, noise_model),
-       moving = std::make_shared<MotionModel>(X(0), X(1), 1.0, noise_model);
-
-  std::vector<std::pair<MotionModel::shared_ptr, double>> components = {
-      {still, 0.0}, {moving, 0.0}};
-
   // Check for exception when number of continuous keys are under-specified.
-  KeyVector contKeys = {X(0)};
-  THROWS_EXCEPTION(std::make_shared<HybridNonlinearFactor>(
-      contKeys, gtsam::DiscreteKey(M(1), 2), components));
+  THROWS_EXCEPTION(
+      std::make_shared<HybridNonlinearFactor>(KeyVector{X(0)}, m1, components));
 
   // Check for exception when number of continuous keys are too many.
-  contKeys = {X(0), X(1), X(2)};
   THROWS_EXCEPTION(std::make_shared<HybridNonlinearFactor>(
-      contKeys, gtsam::DiscreteKey(M(1), 2), components));
+      KeyVector{X(0), X(1), X(2)}, m1, components));
 }
 
 /*****************************************************************************
  * Test push_back on HFG makes the correct distinction.
  */
-TEST(HybridFactorGraph, PushBack) {
+TEST(HybridNonlinearFactorGraph, PushBack) {
   HybridNonlinearFactorGraph fg;
 
   auto nonlinearFactor = std::make_shared<BetweenFactor<double>>();
@@ -240,7 +238,7 @@ TEST(HybridFactorGraph, PushBack) {
 /****************************************************************************
  * Test construction of switching-like hybrid factor graph.
  */
-TEST(HybridFactorGraph, Switching) {
+TEST(HybridNonlinearFactorGraph, Switching) {
   Switching self(3);
 
   EXPECT_LONGS_EQUAL(7, self.nonlinearFactorGraph.size());
@@ -250,7 +248,7 @@ TEST(HybridFactorGraph, Switching) {
 /****************************************************************************
  * Test linearization on a switching-like hybrid factor graph.
  */
-TEST(HybridFactorGraph, Linearization) {
+TEST(HybridNonlinearFactorGraph, Linearization) {
   Switching self(3);
 
   // Linearize here:
@@ -263,7 +261,7 @@ TEST(HybridFactorGraph, Linearization) {
 /****************************************************************************
  * Test elimination tree construction
  */
-TEST(HybridFactorGraph, EliminationTree) {
+TEST(HybridNonlinearFactorGraph, EliminationTree) {
   Switching self(3);
 
   // Create ordering.
@@ -372,7 +370,7 @@ TEST(HybridGaussianElimination, EliminateHybrid_2_Variable) {
 /****************************************************************************
  * Test partial elimination
  */
-TEST(HybridFactorGraph, Partial_Elimination) {
+TEST(HybridNonlinearFactorGraph, Partial_Elimination) {
   Switching self(3);
 
   auto linearizedFactorGraph = self.linearizedFactorGraph;
@@ -401,7 +399,39 @@ TEST(HybridFactorGraph, Partial_Elimination) {
   EXPECT(remainingFactorGraph->at(2)->keys() == KeyVector({M(0), M(1)}));
 }
 
-TEST(HybridFactorGraph, PrintErrors) {
+/* ****************************************************************************/
+TEST(HybridNonlinearFactorGraph, Error) {
+  Switching self(3);
+  HybridNonlinearFactorGraph fg = self.nonlinearFactorGraph;
+
+  {
+    HybridValues values(VectorValues(), DiscreteValues{{M(0), 0}, {M(1), 0}},
+                        self.linearizationPoint);
+    // regression
+    EXPECT_DOUBLES_EQUAL(152.791759469, fg.error(values), 1e-9);
+  }
+  {
+    HybridValues values(VectorValues(), DiscreteValues{{M(0), 0}, {M(1), 1}},
+                        self.linearizationPoint);
+    // regression
+    EXPECT_DOUBLES_EQUAL(151.598612289, fg.error(values), 1e-9);
+  }
+  {
+    HybridValues values(VectorValues(), DiscreteValues{{M(0), 1}, {M(1), 0}},
+                        self.linearizationPoint);
+    // regression
+    EXPECT_DOUBLES_EQUAL(151.703972804, fg.error(values), 1e-9);
+  }
+  {
+    HybridValues values(VectorValues(), DiscreteValues{{M(0), 1}, {M(1), 1}},
+                        self.linearizationPoint);
+    // regression
+    EXPECT_DOUBLES_EQUAL(151.609437912, fg.error(values), 1e-9);
+  }
+}
+
+/* ****************************************************************************/
+TEST(HybridNonlinearFactorGraph, PrintErrors) {
   Switching self(3);
 
   // Get nonlinear factor graph and add linear factors to be holistic
@@ -424,7 +454,7 @@ TEST(HybridFactorGraph, PrintErrors) {
 /****************************************************************************
  * Test full elimination
  */
-TEST(HybridFactorGraph, Full_Elimination) {
+TEST(HybridNonlinearFactorGraph, Full_Elimination) {
   Switching self(3);
 
   auto linearizedFactorGraph = self.linearizedFactorGraph;
@@ -492,7 +522,7 @@ TEST(HybridFactorGraph, Full_Elimination) {
 /****************************************************************************
  * Test printing
  */
-TEST(HybridFactorGraph, Printing) {
+TEST(HybridNonlinearFactorGraph, Printing) {
   Switching self(3);
 
   auto linearizedFactorGraph = self.linearizedFactorGraph;
@@ -784,7 +814,7 @@ conditional 2: Hybrid  P( x2 | m0 m1)
  * The issue arises if we eliminate a landmark variable first since it is not
  * connected to a HybridFactor.
  */
-TEST(HybridFactorGraph, DefaultDecisionTree) {
+TEST(HybridNonlinearFactorGraph, DefaultDecisionTree) {
   HybridNonlinearFactorGraph fg;
 
   // Add a prior on pose x0 at the origin.
@@ -800,12 +830,10 @@ TEST(HybridFactorGraph, DefaultDecisionTree) {
   Pose2 odometry(2.0, 0.0, 0.0);
   KeyVector contKeys = {X(0), X(1)};
   auto noise_model = noiseModel::Isotropic::Sigma(3, 1.0);
-  auto still = std::make_shared<PlanarMotionModel>(X(0), X(1), Pose2(0, 0, 0),
-                                                   noise_model),
-       moving = std::make_shared<PlanarMotionModel>(X(0), X(1), odometry,
-                                                    noise_model);
-  std::vector<std::pair<PlanarMotionModel::shared_ptr, double>> motion_models =
-      {{still, 0.0}, {moving, 0.0}};
+  std::vector<NonlinearFactor::shared_ptr> motion_models = {
+      std::make_shared<PlanarMotionModel>(X(0), X(1), Pose2(0, 0, 0),
+                                          noise_model),
+      std::make_shared<PlanarMotionModel>(X(0), X(1), odometry, noise_model)};
   fg.emplace_shared<HybridNonlinearFactor>(
       contKeys, gtsam::DiscreteKey(M(1), 2), motion_models);
 
@@ -870,9 +898,8 @@ static HybridNonlinearFactorGraph CreateFactorGraph(
   // Create HybridNonlinearFactor
   // We take negative since we want
   // the underlying scalar to be log(\sqrt(|2πΣ|))
-  std::vector<NonlinearFactorValuePair> factors{
-      {f0, -model0->logNormalizationConstant()},
-      {f1, -model1->logNormalizationConstant()}};
+  std::vector<NonlinearFactorValuePair> factors{{f0, model0->negLogConstant()},
+                                                {f1, model1->negLogConstant()}};
 
   HybridNonlinearFactor mixtureFactor({X(0), X(1)}, m1, factors);
 

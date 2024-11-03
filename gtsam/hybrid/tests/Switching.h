@@ -31,6 +31,9 @@
 
 #include <vector>
 
+#include "gtsam/linear/GaussianFactor.h"
+#include "gtsam/linear/GaussianFactorGraph.h"
+
 #pragma once
 
 namespace gtsam {
@@ -44,33 +47,28 @@ using symbol_shorthand::X;
  * system which depends on a discrete mode at each time step of the chain.
  *
  * @param n The number of chain elements.
- * @param keyFunc The functional to help specify the continuous key.
- * @param dKeyFunc The functional to help specify the discrete key.
+ * @param x The functional to help specify the continuous key.
+ * @param m The functional to help specify the discrete key.
  * @return HybridGaussianFactorGraph::shared_ptr
  */
 inline HybridGaussianFactorGraph::shared_ptr makeSwitchingChain(
-    size_t n, std::function<Key(int)> keyFunc = X,
-    std::function<Key(int)> dKeyFunc = M) {
+    size_t n, std::function<Key(int)> x = X, std::function<Key(int)> m = M) {
   HybridGaussianFactorGraph hfg;
 
-  hfg.add(JacobianFactor(keyFunc(1), I_3x3, Z_3x1));
+  hfg.add(JacobianFactor(x(1), I_3x3, Z_3x1));
 
-  // keyFunc(1) to keyFunc(n+1)
+  // x(1) to x(n+1)
   for (size_t t = 1; t < n; t++) {
-    DiscreteKeys dKeys{{dKeyFunc(t), 2}};
-    HybridGaussianFactor::FactorValuePairs components(
-        dKeys, {{std::make_shared<JacobianFactor>(keyFunc(t), I_3x3,
-                                                  keyFunc(t + 1), I_3x3, Z_3x1),
-                 0.0},
-                {std::make_shared<JacobianFactor>(
-                     keyFunc(t), I_3x3, keyFunc(t + 1), I_3x3, Vector3::Ones()),
-                 0.0}});
-    hfg.add(
-        HybridGaussianFactor({keyFunc(t), keyFunc(t + 1)}, dKeys, components));
+    DiscreteKeys dKeys{{m(t), 2}};
+    std::vector<GaussianFactor::shared_ptr> components;
+    components.emplace_back(
+        new JacobianFactor(x(t), I_3x3, x(t + 1), I_3x3, Z_3x1));
+    components.emplace_back(
+        new JacobianFactor(x(t), I_3x3, x(t + 1), I_3x3, Vector3::Ones()));
+    hfg.add(HybridGaussianFactor({x(t), x(t + 1)}, {m(t), 2}, components));
 
     if (t > 1) {
-      hfg.add(DecisionTreeFactor({{dKeyFunc(t - 1), 2}, {dKeyFunc(t), 2}},
-                                 "0 1 1 3"));
+      hfg.add(DecisionTreeFactor({{m(t - 1), 2}, {m(t), 2}}, "0 1 1 3"));
     }
   }
 
@@ -163,13 +161,8 @@ struct Switching {
     for (size_t k = 0; k < K - 1; k++) {
       KeyVector keys = {X(k), X(k + 1)};
       auto motion_models = motionModels(k, between_sigma);
-      std::vector<NonlinearFactorValuePair> components;
-      for (auto &&f : motion_models) {
-        components.push_back(
-            {std::dynamic_pointer_cast<NonlinearFactor>(f), 0.0});
-      }
       nonlinearFactorGraph.emplace_shared<HybridNonlinearFactor>(keys, modes[k],
-                                                                 components);
+                                                                 motion_models);
     }
 
     // Add measurement factors
@@ -193,8 +186,8 @@ struct Switching {
   }
 
   // Create motion models for a given time step
-  static std::vector<MotionModel::shared_ptr> motionModels(size_t k,
-                                                           double sigma = 1.0) {
+  static std::vector<NonlinearFactor::shared_ptr> motionModels(
+      size_t k, double sigma = 1.0) {
     auto noise_model = noiseModel::Isotropic::Sigma(1, sigma);
     auto still =
              std::make_shared<MotionModel>(X(k), X(k + 1), 0.0, noise_model),

@@ -36,7 +36,7 @@ HybridGaussianFactor::FactorValuePairs GetFactorValuePairs(
     // Check if conditional is pruned
     if (conditional) {
       // Assign log(\sqrt(|2πΣ|)) = -log(1 / sqrt(|2πΣ|))
-      value = -conditional->logNormalizationConstant();
+      value = conditional->negLogConstant();
     }
     return {std::dynamic_pointer_cast<GaussianFactor>(conditional), value};
   };
@@ -51,14 +51,14 @@ HybridGaussianConditional::HybridGaussianConditional(
                  discreteParents, GetFactorValuePairs(conditionals)),
       BaseConditional(continuousFrontals.size()),
       conditionals_(conditionals) {
-  // Calculate logConstant_ as the minimum of the log normalizers of the
-  // conditionals, by visiting the decision tree:
-  logConstant_ = std::numeric_limits<double>::infinity();
+  // Calculate negLogConstant_ as the minimum of the negative-log normalizers of
+  // the conditionals, by visiting the decision tree:
+  negLogConstant_ = std::numeric_limits<double>::infinity();
   conditionals_.visit(
       [this](const GaussianConditional::shared_ptr &conditional) {
         if (conditional) {
-          this->logConstant_ = std::min(
-              this->logConstant_, -conditional->logNormalizationConstant());
+          this->negLogConstant_ =
+              std::min(this->negLogConstant_, conditional->negLogConstant());
         }
       });
 }
@@ -84,8 +84,7 @@ GaussianFactorGraphTree HybridGaussianConditional::asGaussianFactorGraphTree()
   auto wrap = [this](const GaussianConditional::shared_ptr &gc) {
     // First check if conditional has not been pruned
     if (gc) {
-      const double Cgm_Kgcm =
-          -this->logConstant_ - gc->logNormalizationConstant();
+      const double Cgm_Kgcm = gc->negLogConstant() - this->negLogConstant_;
       // If there is a difference in the covariances, we need to account for
       // that since the error is dependent on the mode.
       if (Cgm_Kgcm > 0.0) {
@@ -156,8 +155,7 @@ void HybridGaussianConditional::print(const std::string &s,
     std::cout << "(" << formatter(dk.first) << ", " << dk.second << "), ";
   }
   std::cout << std::endl
-            << " logNormalizationConstant: " << logNormalizationConstant()
-            << std::endl
+            << " logNormalizationConstant: " << -negLogConstant() << std::endl
             << std::endl;
   conditionals_.print(
       "", [&](Key k) { return formatter(k); },
@@ -215,8 +213,7 @@ std::shared_ptr<HybridGaussianFactor> HybridGaussianConditional::likelihood(
       [&](const GaussianConditional::shared_ptr &conditional)
           -> GaussianFactorValuePair {
         const auto likelihood_m = conditional->likelihood(given);
-        const double Cgm_Kgcm =
-            -logConstant_ - conditional->logNormalizationConstant();
+        const double Cgm_Kgcm = conditional->negLogConstant() - negLogConstant_;
         if (Cgm_Kgcm == 0.0) {
           return {likelihood_m, 0.0};
         } else {
@@ -321,40 +318,6 @@ AlgebraicDecisionTree<Key> HybridGaussianConditional::logProbability(
         }
       };
   return DecisionTree<Key, double>(conditionals_, probFunc);
-}
-
-/* ************************************************************************* */
-double HybridGaussianConditional::conditionalError(
-    const GaussianConditional::shared_ptr &conditional,
-    const VectorValues &continuousValues) const {
-  // Check if valid pointer
-  if (conditional) {
-    return conditional->error(continuousValues) +  //
-           -logConstant_ - conditional->logNormalizationConstant();
-  } else {
-    // If not valid, pointer, it means this conditional was pruned,
-    // so we return maximum error.
-    // This way the negative exponential will give
-    // a probability value close to 0.0.
-    return std::numeric_limits<double>::max();
-  }
-}
-
-/* *******************************************************************************/
-AlgebraicDecisionTree<Key> HybridGaussianConditional::errorTree(
-    const VectorValues &continuousValues) const {
-  auto errorFunc = [&](const GaussianConditional::shared_ptr &conditional) {
-    return conditionalError(conditional, continuousValues);
-  };
-  DecisionTree<Key, double> error_tree(conditionals_, errorFunc);
-  return error_tree;
-}
-
-/* *******************************************************************************/
-double HybridGaussianConditional::error(const HybridValues &values) const {
-  // Directly index to get the conditional, no need to build the whole tree.
-  auto conditional = conditionals_(values.discrete());
-  return conditionalError(conditional, values.continuous());
 }
 
 /* *******************************************************************************/

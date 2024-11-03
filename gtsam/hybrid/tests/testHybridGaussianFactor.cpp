@@ -55,31 +55,48 @@ TEST(HybridGaussianFactor, Constructor) {
 }
 
 /* ************************************************************************* */
+namespace test_constructor {
+DiscreteKey m1(1, 2);
+
+auto A1 = Matrix::Zero(2, 1);
+auto A2 = Matrix::Zero(2, 2);
+auto b = Matrix::Zero(2, 1);
+
+auto f10 = std::make_shared<JacobianFactor>(X(1), A1, X(2), A2, b);
+auto f11 = std::make_shared<JacobianFactor>(X(1), A1, X(2), A2, b);
+}  // namespace test_constructor
+
+/* ************************************************************************* */
+// Test simple to complex constructors...
+TEST(HybridGaussianFactor, ConstructorVariants) {
+  using namespace test_constructor;
+  HybridGaussianFactor fromFactors({X(1), X(2)}, m1, {f10, f11});
+
+  std::vector<GaussianFactorValuePair> pairs{{f10, 0.0}, {f11, 0.0}};
+  HybridGaussianFactor fromPairs({X(1), X(2)}, m1, pairs);
+  assert_equal(fromFactors, fromPairs);
+
+  HybridGaussianFactor::FactorValuePairs decisionTree({m1}, pairs);
+  HybridGaussianFactor fromDecisionTree({X(1), X(2)}, {m1}, decisionTree);
+  assert_equal(fromDecisionTree, fromPairs);
+}
+
+/* ************************************************************************* */
 // "Add" two hybrid factors together.
 TEST(HybridGaussianFactor, Sum) {
-  DiscreteKey m1(1, 2), m2(2, 3);
+  using namespace test_constructor;
+  DiscreteKey m2(2, 3);
 
-  auto A1 = Matrix::Zero(2, 1);
-  auto A2 = Matrix::Zero(2, 2);
   auto A3 = Matrix::Zero(2, 3);
-  auto b = Matrix::Zero(2, 1);
-  Vector2 sigmas;
-  sigmas << 1, 2;
-
-  auto f10 = std::make_shared<JacobianFactor>(X(1), A1, X(2), A2, b);
-  auto f11 = std::make_shared<JacobianFactor>(X(1), A1, X(2), A2, b);
   auto f20 = std::make_shared<JacobianFactor>(X(1), A1, X(3), A3, b);
   auto f21 = std::make_shared<JacobianFactor>(X(1), A1, X(3), A3, b);
   auto f22 = std::make_shared<JacobianFactor>(X(1), A1, X(3), A3, b);
-  std::vector<GaussianFactorValuePair> factorsA{{f10, 0.0}, {f11, 0.0}};
-  std::vector<GaussianFactorValuePair> factorsB{
-      {f20, 0.0}, {f21, 0.0}, {f22, 0.0}};
 
   // TODO(Frank): why specify keys at all? And: keys in factor should be *all*
   // keys, deviating from Kevin's scheme. Should we index DT on DiscreteKey?
   // Design review!
-  HybridGaussianFactor hybridFactorA({X(1), X(2)}, {m1}, factorsA);
-  HybridGaussianFactor hybridFactorB({X(1), X(3)}, {m2}, factorsB);
+  HybridGaussianFactor hybridFactorA({X(1), X(2)}, m1, {f10, f11});
+  HybridGaussianFactor hybridFactorB({X(1), X(3)}, m2, {f20, f21, f22});
 
   // Check that number of keys is 3
   EXPECT_LONGS_EQUAL(3, hybridFactorA.keys().size());
@@ -104,15 +121,8 @@ TEST(HybridGaussianFactor, Sum) {
 
 /* ************************************************************************* */
 TEST(HybridGaussianFactor, Printing) {
-  DiscreteKey m1(1, 2);
-  auto A1 = Matrix::Zero(2, 1);
-  auto A2 = Matrix::Zero(2, 2);
-  auto b = Matrix::Zero(2, 1);
-  auto f10 = std::make_shared<JacobianFactor>(X(1), A1, X(2), A2, b);
-  auto f11 = std::make_shared<JacobianFactor>(X(1), A1, X(2), A2, b);
-  std::vector<GaussianFactorValuePair> factors{{f10, 0.0}, {f11, 0.0}};
-
-  HybridGaussianFactor hybridFactor({X(1), X(2)}, {m1}, factors);
+  using namespace test_constructor;
+  HybridGaussianFactor hybridFactor({X(1), X(2)}, m1, {f10, f11});
 
   std::string expected =
       R"(HybridGaussianFactor
@@ -179,9 +189,7 @@ TEST(HybridGaussianFactor, Error) {
 
   auto f0 = std::make_shared<JacobianFactor>(X(1), A01, X(2), A02, b);
   auto f1 = std::make_shared<JacobianFactor>(X(1), A11, X(2), A12, b);
-  std::vector<GaussianFactorValuePair> factors{{f0, 0.0}, {f1, 0.0}};
-
-  HybridGaussianFactor hybridFactor({X(1), X(2)}, {m1}, factors);
+  HybridGaussianFactor hybridFactor({X(1), X(2)}, m1, {f0, f1});
 
   VectorValues continuousValues;
   continuousValues.insert(X(1), Vector2(0, 0));
@@ -203,193 +211,6 @@ TEST(HybridGaussianFactor, Error) {
   discreteValues[m1.first] = 1;
   EXPECT_DOUBLES_EQUAL(
       4.0, hybridFactor.error({continuousValues, discreteValues}), 1e-9);
-}
-
-namespace test_gmm {
-
-/**
- * Function to compute P(m=1|z). For P(m=0|z), swap mus and sigmas.
- * If sigma0 == sigma1, it simplifies to a sigmoid function.
- *
- * Follows equation 7.108 since it is more generic.
- */
-double prob_m_z(double mu0, double mu1, double sigma0, double sigma1,
-                double z) {
-  double x1 = ((z - mu0) / sigma0), x2 = ((z - mu1) / sigma1);
-  double d = sigma1 / sigma0;
-  double e = d * std::exp(-0.5 * (x1 * x1 - x2 * x2));
-  return 1 / (1 + e);
-};
-
-static HybridBayesNet GetGaussianMixtureModel(double mu0, double mu1,
-                                              double sigma0, double sigma1) {
-  DiscreteKey m(M(0), 2);
-  Key z = Z(0);
-
-  auto model0 = noiseModel::Isotropic::Sigma(1, sigma0);
-  auto model1 = noiseModel::Isotropic::Sigma(1, sigma1);
-
-  auto c0 = make_shared<GaussianConditional>(z, Vector1(mu0), I_1x1, model0),
-       c1 = make_shared<GaussianConditional>(z, Vector1(mu1), I_1x1, model1);
-
-  HybridBayesNet hbn;
-  DiscreteKeys discreteParents{m};
-  hbn.emplace_shared<HybridGaussianConditional>(
-      KeyVector{z}, KeyVector{}, discreteParents,
-      HybridGaussianConditional::Conditionals(discreteParents,
-                                              std::vector{c0, c1}));
-
-  auto mixing = make_shared<DiscreteConditional>(m, "50/50");
-  hbn.push_back(mixing);
-
-  return hbn;
-}
-
-}  // namespace test_gmm
-
-/* ************************************************************************* */
-/**
- * Test a simple Gaussian Mixture Model represented as P(m)P(z|m)
- * where m is a discrete variable and z is a continuous variable.
- * m is binary and depending on m, we have 2 different means
- * μ1 and μ2 for the Gaussian distribution around which we sample z.
- *
- * The resulting factor graph should eliminate to a Bayes net
- * which represents a sigmoid function.
- */
-TEST(HybridGaussianFactor, GaussianMixtureModel) {
-  using namespace test_gmm;
-
-  double mu0 = 1.0, mu1 = 3.0;
-  double sigma = 2.0;
-
-  DiscreteKey m(M(0), 2);
-  Key z = Z(0);
-
-  auto hbn = GetGaussianMixtureModel(mu0, mu1, sigma, sigma);
-
-  // The result should be a sigmoid.
-  // So should be P(m=1|z) = 0.5 at z=3.0 - 1.0=2.0
-  double midway = mu1 - mu0, lambda = 4;
-  {
-    VectorValues given;
-    given.insert(z, Vector1(midway));
-
-    HybridGaussianFactorGraph gfg = hbn.toFactorGraph(given);
-    HybridBayesNet::shared_ptr bn = gfg.eliminateSequential();
-
-    EXPECT_DOUBLES_EQUAL(
-        prob_m_z(mu0, mu1, sigma, sigma, midway),
-        bn->at(0)->asDiscrete()->operator()(DiscreteValues{{m.first, 1}}),
-        1e-8);
-
-    // At the halfway point between the means, we should get P(m|z)=0.5
-    HybridBayesNet expected;
-    expected.emplace_shared<DiscreteConditional>(m, "50/50");
-
-    EXPECT(assert_equal(expected, *bn));
-  }
-  {
-    // Shift by -lambda
-    VectorValues given;
-    given.insert(z, Vector1(midway - lambda));
-
-    HybridGaussianFactorGraph gfg = hbn.toFactorGraph(given);
-    HybridBayesNet::shared_ptr bn = gfg.eliminateSequential();
-
-    EXPECT_DOUBLES_EQUAL(
-        prob_m_z(mu0, mu1, sigma, sigma, midway - lambda),
-        bn->at(0)->asDiscrete()->operator()(DiscreteValues{{m.first, 1}}),
-        1e-8);
-  }
-  {
-    // Shift by lambda
-    VectorValues given;
-    given.insert(z, Vector1(midway + lambda));
-
-    HybridGaussianFactorGraph gfg = hbn.toFactorGraph(given);
-    HybridBayesNet::shared_ptr bn = gfg.eliminateSequential();
-
-    EXPECT_DOUBLES_EQUAL(
-        prob_m_z(mu0, mu1, sigma, sigma, midway + lambda),
-        bn->at(0)->asDiscrete()->operator()(DiscreteValues{{m.first, 1}}),
-        1e-8);
-  }
-}
-
-/* ************************************************************************* */
-/**
- * Test a simple Gaussian Mixture Model represented as P(m)P(z|m)
- * where m is a discrete variable and z is a continuous variable.
- * m is binary and depending on m, we have 2 different means
- * and covariances each for the
- * Gaussian distribution around which we sample z.
- *
- * The resulting factor graph should eliminate to a Bayes net
- * which represents a Gaussian-like function
- * where m1>m0 close to 3.1333.
- */
-TEST(HybridGaussianFactor, GaussianMixtureModel2) {
-  using namespace test_gmm;
-
-  double mu0 = 1.0, mu1 = 3.0;
-  double sigma0 = 8.0, sigma1 = 4.0;
-
-  DiscreteKey m(M(0), 2);
-  Key z = Z(0);
-
-  auto hbn = GetGaussianMixtureModel(mu0, mu1, sigma0, sigma1);
-
-  double m1_high = 3.133, lambda = 4;
-  {
-    // The result should be a bell curve like function
-    // with m1 > m0 close to 3.1333.
-    // We get 3.1333 by finding the maximum value of the function.
-    VectorValues given;
-    given.insert(z, Vector1(3.133));
-
-    HybridGaussianFactorGraph gfg = hbn.toFactorGraph(given);
-    HybridBayesNet::shared_ptr bn = gfg.eliminateSequential();
-
-    EXPECT_DOUBLES_EQUAL(
-        prob_m_z(mu0, mu1, sigma0, sigma1, m1_high),
-        bn->at(0)->asDiscrete()->operator()(DiscreteValues{{M(0), 1}}), 1e-8);
-
-    // At the halfway point between the means
-    HybridBayesNet expected;
-    expected.emplace_shared<DiscreteConditional>(
-        m, DiscreteKeys{},
-        vector<double>{prob_m_z(mu1, mu0, sigma1, sigma0, m1_high),
-                       prob_m_z(mu0, mu1, sigma0, sigma1, m1_high)});
-
-    EXPECT(assert_equal(expected, *bn));
-  }
-  {
-    // Shift by -lambda
-    VectorValues given;
-    given.insert(z, Vector1(m1_high - lambda));
-
-    HybridGaussianFactorGraph gfg = hbn.toFactorGraph(given);
-    HybridBayesNet::shared_ptr bn = gfg.eliminateSequential();
-
-    EXPECT_DOUBLES_EQUAL(
-        prob_m_z(mu0, mu1, sigma0, sigma1, m1_high - lambda),
-        bn->at(0)->asDiscrete()->operator()(DiscreteValues{{m.first, 1}}),
-        1e-8);
-  }
-  {
-    // Shift by lambda
-    VectorValues given;
-    given.insert(z, Vector1(m1_high + lambda));
-
-    HybridGaussianFactorGraph gfg = hbn.toFactorGraph(given);
-    HybridBayesNet::shared_ptr bn = gfg.eliminateSequential();
-
-    EXPECT_DOUBLES_EQUAL(
-        prob_m_z(mu0, mu1, sigma0, sigma1, m1_high + lambda),
-        bn->at(0)->asDiscrete()->operator()(DiscreteValues{{m.first, 1}}),
-        1e-8);
-  }
 }
 
 namespace test_two_state_estimation {
@@ -772,9 +593,8 @@ static HybridGaussianFactorGraph CreateFactorGraph(
   // Create HybridGaussianFactor
   // We take negative since we want
   // the underlying scalar to be log(\sqrt(|2πΣ|))
-  std::vector<GaussianFactorValuePair> factors{
-      {f0, -model0->logNormalizationConstant()},
-      {f1, -model1->logNormalizationConstant()}};
+  std::vector<GaussianFactorValuePair> factors{{f0, model0->negLogConstant()},
+                                               {f1, model1->negLogConstant()}};
   HybridGaussianFactor motionFactor({X(0), X(1)}, m1, factors);
 
   HybridGaussianFactorGraph hfg;

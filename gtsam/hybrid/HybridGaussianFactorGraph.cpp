@@ -233,18 +233,18 @@ continuousElimination(const HybridGaussianFactorGraph &factors,
 
 /* ************************************************************************ */
 /**
- * @brief Exponentiate log-values, not necessarily normalized, normalize, and
- * return as AlgebraicDecisionTree<Key>.
+ * @brief Exponentiate (not necessarily normalized) negative log-values,
+ * normalize, and then return as AlgebraicDecisionTree<Key>.
  *
  * @param logValues DecisionTree of (unnormalized) log values.
  * @return AlgebraicDecisionTree<Key>
  */
-static AlgebraicDecisionTree<Key> probabilitiesFromLogValues(
+static AlgebraicDecisionTree<Key> probabilitiesFromNegativeLogValues(
     const AlgebraicDecisionTree<Key> &logValues) {
   // Perform normalization
-  double max_log = logValues.max();
+  double min_log = logValues.min();
   AlgebraicDecisionTree<Key> probabilities = DecisionTree<Key, double>(
-      logValues, [&max_log](const double x) { return exp(x - max_log); });
+      logValues, [&min_log](const double x) { return exp(-(x - min_log)); });
   probabilities = probabilities.normalize(probabilities.sum());
 
   return probabilities;
@@ -265,13 +265,13 @@ discreteElimination(const HybridGaussianFactorGraph &factors,
       auto logProbability =
           [&](const GaussianFactor::shared_ptr &factor) -> double {
         if (!factor) return 0.0;
-        return -factor->error(VectorValues());
+        return factor->error(VectorValues());
       };
       AlgebraicDecisionTree<Key> logProbabilities =
           DecisionTree<Key, double>(gmf->factors(), logProbability);
 
       AlgebraicDecisionTree<Key> probabilities =
-          probabilitiesFromLogValues(logProbabilities);
+          probabilitiesFromNegativeLogValues(logProbabilities);
       dfg.emplace_shared<DecisionTreeFactor>(gmf->discreteKeys(),
                                              probabilities);
 
@@ -321,23 +321,23 @@ using Result = std::pair<std::shared_ptr<GaussianConditional>,
 static std::shared_ptr<Factor> createDiscreteFactor(
     const DecisionTree<Key, Result> &eliminationResults,
     const DiscreteKeys &discreteSeparator) {
-  auto logProbability = [&](const Result &pair) -> double {
+  auto negLogProbability = [&](const Result &pair) -> double {
     const auto &[conditional, factor] = pair;
     static const VectorValues kEmpty;
     // If the factor is not null, it has no keys, just contains the residual.
     if (!factor) return 1.0;  // TODO(dellaert): not loving this.
 
-    // Logspace version of:
+    // Negative logspace version of:
     // exp(-factor->error(kEmpty)) / conditional->normalizationConstant();
-    // We take negative of the logNormalizationConstant `log(1/k)`
-    // to get `log(k)`.
-    return -factor->error(kEmpty) - conditional->logNormalizationConstant();
+    // negLogConstant gives `-log(k)`
+    // which is `-log(k) = log(1/k) = log(\sqrt{|2πΣ|})`.
+    return factor->error(kEmpty) - conditional->negLogConstant();
   };
 
-  AlgebraicDecisionTree<Key> logProbabilities(
-      DecisionTree<Key, double>(eliminationResults, logProbability));
+  AlgebraicDecisionTree<Key> negLogProbabilities(
+      DecisionTree<Key, double>(eliminationResults, negLogProbability));
   AlgebraicDecisionTree<Key> probabilities =
-      probabilitiesFromLogValues(logProbabilities);
+      probabilitiesFromNegativeLogValues(negLogProbabilities);
 
   return std::make_shared<DecisionTreeFactor>(discreteSeparator, probabilities);
 }
@@ -355,8 +355,9 @@ static std::shared_ptr<Factor> createHybridGaussianFactor(
       auto hf = std::dynamic_pointer_cast<HessianFactor>(factor);
       if (!hf) throw std::runtime_error("Expected HessianFactor!");
       // Add 2.0 term since the constant term will be premultiplied by 0.5
-      // as per the Hessian definition
-      hf->constantTerm() += 2.0 * conditional->logNormalizationConstant();
+      // as per the Hessian definition,
+      // and negative since we want log(k)
+      hf->constantTerm() += -2.0 * conditional->negLogConstant();
     }
     return {factor, 0.0};
   };
@@ -539,36 +540,20 @@ EliminateHybrid(const HybridGaussianFactorGraph &factors,
 AlgebraicDecisionTree<Key> HybridGaussianFactorGraph::errorTree(
     const VectorValues &continuousValues) const {
   AlgebraicDecisionTree<Key> error_tree(0.0);
-
   // Iterate over each factor.
   for (auto &factor : factors_) {
-    // TODO(dellaert): just use a virtual method defined in HybridFactor.
-    AlgebraicDecisionTree<Key> factor_error;
-
-    auto f = factor;
-    if (auto hc = dynamic_pointer_cast<HybridConditional>(factor)) {
-      f = hc->inner();
-    }
-
-    if (auto hybridGaussianCond =
-            dynamic_pointer_cast<HybridGaussianFactor>(f)) {
-      // Compute factor error and add it.
-      error_tree = error_tree + hybridGaussianCond->errorTree(continuousValues);
-    } else if (auto gaussian = dynamic_pointer_cast<GaussianFactor>(f)) {
-      // If continuous only, get the (double) error
-      // and add it to the error_tree
-      double error = gaussian->error(continuousValues);
-      // Add the gaussian factor error to every leaf of the error tree.
-      error_tree = error_tree.apply(
-          [error](double leaf_value) { return leaf_value + error; });
-    } else if (dynamic_pointer_cast<DiscreteFactor>(f)) {
-      // If factor at `idx` is discrete-only, we skip.
+    if (auto f = std::dynamic_pointer_cast<HybridFactor>(factor)) {
+      // Check for HybridFactor, and call errorTree
+      error_tree = error_tree + f->errorTree(continuousValues);
+    } else if (auto f = std::dynamic_pointer_cast<DiscreteFactor>(factor)) {
+      // Skip discrete factors
       continue;
     } else {
-      throwRuntimeError("HybridGaussianFactorGraph::error(VV)", f);
+      // Everything else is a continuous only factor
+      HybridValues hv(continuousValues, DiscreteValues());
+      error_tree = error_tree + AlgebraicDecisionTree<Key>(factor->error(hv));
     }
   }
-
   return error_tree;
 }
 

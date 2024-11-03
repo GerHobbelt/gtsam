@@ -179,15 +179,26 @@ class GTSAM_EXPORT HybridConditional
   /// Return the error of the underlying conditional.
   double error(const HybridValues& values) const override;
 
+  /**
+   * @brief Compute error of the HybridConditional as a tree.
+   *
+   * @param continuousValues The continuous VectorValues.
+   * @return AlgebraicDecisionTree<Key> A decision tree with the same keys
+   * as the conditionals involved, and leaf values as the error.
+   */
+  AlgebraicDecisionTree<Key> errorTree(
+      const VectorValues& values) const override;
+
   /// Return the log-probability (or density) of the underlying conditional.
   double logProbability(const HybridValues& values) const override;
 
   /**
-   * Return the log normalization constant.
+   * Return the negative log of the normalization constant.
+   * This shows up in the error as -(error(x) + negLogConstant)
    * Note this is 0.0 for discrete and hybrid conditionals, but depends
    * on the continuous parameters for Gaussian conditionals.
    */
-  double logNormalizationConstant() const override;
+  double negLogConstant() const override;
 
   /// Return the probability (or density) of the underlying conditional.
   double evaluate(const HybridValues& values) const override;
