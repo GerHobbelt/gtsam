@@ -28,14 +28,9 @@ HybridConditional::HybridConditional(const KeyVector &continuousFrontals,
                                      const DiscreteKeys &discreteFrontals,
                                      const KeyVector &continuousParents,
                                      const DiscreteKeys &discreteParents)
-    : HybridConditional(
-          CollectKeys(
-              {continuousFrontals.begin(), continuousFrontals.end()},
-              KeyVector{continuousParents.begin(), continuousParents.end()}),
-          CollectDiscreteKeys(
-              {discreteFrontals.begin(), discreteFrontals.end()},
-              {discreteParents.begin(), discreteParents.end()}),
-          continuousFrontals.size() + discreteFrontals.size()) {}
+    : HybridConditional(CollectKeys(continuousFrontals, continuousParents),
+                        CollectDiscreteKeys(discreteFrontals, discreteParents),
+                        continuousFrontals.size() + discreteFrontals.size()) {}
 
 /* ************************************************************************ */
 HybridConditional::HybridConditional(
@@ -55,13 +50,11 @@ HybridConditional::HybridConditional(
 
 /* ************************************************************************ */
 HybridConditional::HybridConditional(
-    const std::shared_ptr<GaussianMixture> &gaussianMixture)
-    : BaseFactor(KeyVector(gaussianMixture->keys().begin(),
-                           gaussianMixture->keys().begin() +
-                               gaussianMixture->nrContinuous()),
-                 gaussianMixture->discreteKeys()),
-      BaseConditional(gaussianMixture->nrFrontals()) {
-  inner_ = gaussianMixture;
+    const std::shared_ptr<HybridGaussianConditional> &hybridGaussianCond)
+    : BaseFactor(hybridGaussianCond->continuousKeys(),
+                 hybridGaussianCond->discreteKeys()),
+      BaseConditional(hybridGaussianCond->nrFrontals()) {
+  inner_ = hybridGaussianCond;
 }
 
 /* ************************************************************************ */
@@ -104,8 +97,8 @@ void HybridConditional::print(const std::string &s,
 bool HybridConditional::equals(const HybridFactor &other, double tol) const {
   const This *e = dynamic_cast<const This *>(&other);
   if (e == nullptr) return false;
-  if (auto gm = asMixture()) {
-    auto other = e->asMixture();
+  if (auto gm = asHybrid()) {
+    auto other = e->asHybrid();
     return other != nullptr && gm->equals(*other, tol);
   }
   if (auto gc = asGaussian()) {
@@ -126,7 +119,7 @@ double HybridConditional::error(const HybridValues &values) const {
   if (auto gc = asGaussian()) {
     return gc->error(values.continuous());
   }
-  if (auto gm = asMixture()) {
+  if (auto gm = asHybrid()) {
     return gm->error(values);
   }
   if (auto dc = asDiscrete()) {
@@ -141,7 +134,7 @@ double HybridConditional::logProbability(const HybridValues &values) const {
   if (auto gc = asGaussian()) {
     return gc->logProbability(values.continuous());
   }
-  if (auto gm = asMixture()) {
+  if (auto gm = asHybrid()) {
     return gm->logProbability(values);
   }
   if (auto dc = asDiscrete()) {
@@ -156,11 +149,11 @@ double HybridConditional::logNormalizationConstant() const {
   if (auto gc = asGaussian()) {
     return gc->logNormalizationConstant();
   }
-  if (auto gm = asMixture()) {
-    return gm->logNormalizationConstant(); // 0.0!
+  if (auto gm = asHybrid()) {
+    return gm->logNormalizationConstant();  // 0.0!
   }
   if (auto dc = asDiscrete()) {
-    return dc->logNormalizationConstant(); // 0.0!
+    return dc->logNormalizationConstant();  // 0.0!
   }
   throw std::runtime_error(
       "HybridConditional::logProbability: conditional type not handled");

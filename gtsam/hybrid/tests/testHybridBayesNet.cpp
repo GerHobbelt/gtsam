@@ -107,8 +107,8 @@ TEST(HybridBayesNet, evaluateHybrid) {
   // Create hybrid Bayes net.
   HybridBayesNet bayesNet;
   bayesNet.push_back(continuousConditional);
-  bayesNet.emplace_shared<GaussianMixture>(
-      KeyVector{X(1)}, KeyVector{}, DiscreteKeys{Asia},
+  bayesNet.emplace_shared<HybridGaussianConditional>(
+      KeyVector{X(1)}, KeyVector{}, Asia,
       std::vector{conditional0, conditional1});
   bayesNet.emplace_shared<DiscreteConditional>(Asia, "99/1");
 
@@ -144,13 +144,13 @@ TEST(HybridBayesNet, Choose) {
 
   EXPECT_LONGS_EQUAL(4, gbn.size());
 
-  EXPECT(assert_equal(*(*hybridBayesNet->at(0)->asMixture())(assignment),
+  EXPECT(assert_equal(*(*hybridBayesNet->at(0)->asHybrid())(assignment),
                       *gbn.at(0)));
-  EXPECT(assert_equal(*(*hybridBayesNet->at(1)->asMixture())(assignment),
+  EXPECT(assert_equal(*(*hybridBayesNet->at(1)->asHybrid())(assignment),
                       *gbn.at(1)));
-  EXPECT(assert_equal(*(*hybridBayesNet->at(2)->asMixture())(assignment),
+  EXPECT(assert_equal(*(*hybridBayesNet->at(2)->asHybrid())(assignment),
                       *gbn.at(2)));
-  EXPECT(assert_equal(*(*hybridBayesNet->at(3)->asMixture())(assignment),
+  EXPECT(assert_equal(*(*hybridBayesNet->at(3)->asHybrid())(assignment),
                       *gbn.at(3)));
 }
 
@@ -168,8 +168,8 @@ TEST(HybridBayesNet, Error) {
              conditional1 = std::make_shared<GaussianConditional>(
                  X(1), Vector1::Constant(2), I_1x1, model1);
 
-  auto gm = std::make_shared<GaussianMixture>(
-      KeyVector{X(1)}, KeyVector{}, DiscreteKeys{Asia},
+  auto gm = std::make_shared<HybridGaussianConditional>(
+      KeyVector{X(1)}, KeyVector{}, Asia,
       std::vector{conditional0, conditional1});
   // Create hybrid Bayes net.
   HybridBayesNet bayesNet;
@@ -280,9 +280,9 @@ TEST(HybridBayesNet, Pruning) {
   const DiscreteValues discrete_values{{M(0), 1}, {M(1), 1}};
   const HybridValues hybridValues{delta.continuous(), discrete_values};
   double logProbability = 0;
-  logProbability += posterior->at(0)->asMixture()->logProbability(hybridValues);
-  logProbability += posterior->at(1)->asMixture()->logProbability(hybridValues);
-  logProbability += posterior->at(2)->asMixture()->logProbability(hybridValues);
+  logProbability += posterior->at(0)->asHybrid()->logProbability(hybridValues);
+  logProbability += posterior->at(1)->asHybrid()->logProbability(hybridValues);
+  logProbability += posterior->at(2)->asHybrid()->logProbability(hybridValues);
   // NOTE(dellaert): the discrete errors were not added in logProbability tree!
   logProbability +=
       posterior->at(3)->asDiscrete()->logProbability(hybridValues);
@@ -383,14 +383,16 @@ TEST(HybridBayesNet, Sampling) {
   HybridNonlinearFactorGraph nfg;
 
   auto noise_model = noiseModel::Diagonal::Sigmas(Vector1(1.0));
+  nfg.emplace_shared<PriorFactor<double>>(X(0), 0.0, noise_model);
+
   auto zero_motion =
       std::make_shared<BetweenFactor<double>>(X(0), X(1), 0, noise_model);
   auto one_motion =
       std::make_shared<BetweenFactor<double>>(X(0), X(1), 1, noise_model);
-  std::vector<NonlinearFactor::shared_ptr> factors = {zero_motion, one_motion};
-  nfg.emplace_shared<PriorFactor<double>>(X(0), 0.0, noise_model);
-  nfg.emplace_shared<MixtureFactor>(
-      KeyVector{X(0), X(1)}, DiscreteKeys{DiscreteKey(M(0), 2)}, factors);
+  nfg.emplace_shared<HybridNonlinearFactor>(
+      KeyVector{X(0), X(1)}, DiscreteKey(M(0), 2),
+      std::vector<NonlinearFactorValuePair>{{zero_motion, 0.0},
+                                            {one_motion, 0.0}});
 
   DiscreteKey mode(M(0), 2);
   nfg.emplace_shared<DiscreteDistribution>(mode, "1/1");

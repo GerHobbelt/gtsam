@@ -10,8 +10,8 @@
  * -------------------------------------------------------------------------- */
 
 /**
- * @file    testGaussianMixture.cpp
- * @brief   Unit tests for GaussianMixture class
+ * @file    testHybridGaussianConditional.cpp
+ * @brief   Unit tests for HybridGaussianConditional class
  * @author  Varun Agrawal
  * @author  Fan Jiang
  * @author  Frank Dellaert
@@ -19,8 +19,8 @@
  */
 
 #include <gtsam/discrete/DiscreteValues.h>
-#include <gtsam/hybrid/GaussianMixture.h>
-#include <gtsam/hybrid/GaussianMixtureFactor.h>
+#include <gtsam/hybrid/HybridGaussianConditional.h>
+#include <gtsam/hybrid/HybridGaussianFactor.h>
 #include <gtsam/hybrid/HybridValues.h>
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/linear/GaussianConditional.h>
@@ -45,36 +45,37 @@ static const HybridValues hv1{vv, assignment1};
 
 /* ************************************************************************* */
 namespace equal_constants {
-// Create a simple GaussianMixture
+// Create a simple HybridGaussianConditional
 const double commonSigma = 2.0;
 const std::vector<GaussianConditional::shared_ptr> conditionals{
     GaussianConditional::sharedMeanAndStddev(Z(0), I_1x1, X(0), Vector1(0.0),
                                              commonSigma),
     GaussianConditional::sharedMeanAndStddev(Z(0), I_1x1, X(0), Vector1(0.0),
                                              commonSigma)};
-const GaussianMixture mixture({Z(0)}, {X(0)}, {mode}, conditionals);
+const HybridGaussianConditional hybrid_conditional({Z(0)}, {X(0)}, mode,
+                                                   conditionals);
 }  // namespace equal_constants
 
 /* ************************************************************************* */
 /// Check that invariants hold
-TEST(GaussianMixture, Invariants) {
+TEST(HybridGaussianConditional, Invariants) {
   using namespace equal_constants;
 
-  // Check that the mixture normalization constant is the max of all constants
-  // which are all equal, in this case, hence:
-  const double K = mixture.logNormalizationConstant();
+  // Check that the conditional normalization constant is the max of all
+  // constants which are all equal, in this case, hence:
+  const double K = hybrid_conditional.logNormalizationConstant();
   EXPECT_DOUBLES_EQUAL(K, conditionals[0]->logNormalizationConstant(), 1e-8);
   EXPECT_DOUBLES_EQUAL(K, conditionals[1]->logNormalizationConstant(), 1e-8);
 
-  EXPECT(GaussianMixture::CheckInvariants(mixture, hv0));
-  EXPECT(GaussianMixture::CheckInvariants(mixture, hv1));
+  EXPECT(HybridGaussianConditional::CheckInvariants(hybrid_conditional, hv0));
+  EXPECT(HybridGaussianConditional::CheckInvariants(hybrid_conditional, hv1));
 }
 
 /* ************************************************************************* */
 /// Check LogProbability.
-TEST(GaussianMixture, LogProbability) {
+TEST(HybridGaussianConditional, LogProbability) {
   using namespace equal_constants;
-  auto actual = mixture.logProbability(vv);
+  auto actual = hybrid_conditional.logProbability(vv);
 
   // Check result.
   std::vector<DiscreteKey> discrete_keys = {mode};
@@ -88,18 +89,18 @@ TEST(GaussianMixture, LogProbability) {
   for (size_t mode : {0, 1}) {
     const HybridValues hv{vv, {{M(0), mode}}};
     EXPECT_DOUBLES_EQUAL(conditionals[mode]->logProbability(vv),
-                         mixture.logProbability(hv), 1e-8);
+                         hybrid_conditional.logProbability(hv), 1e-8);
   }
 }
 
 /* ************************************************************************* */
 /// Check error.
-TEST(GaussianMixture, Error) {
+TEST(HybridGaussianConditional, Error) {
   using namespace equal_constants;
-  auto actual = mixture.errorTree(vv);
+  auto actual = hybrid_conditional.errorTree(vv);
 
   // Check result.
-  std::vector<DiscreteKey> discrete_keys = {mode};
+  DiscreteKeys discrete_keys{mode};
   std::vector<double> leaves = {conditionals[0]->error(vv),
                                 conditionals[1]->error(vv)};
   AlgebraicDecisionTree<Key> expected(discrete_keys, leaves);
@@ -109,23 +110,26 @@ TEST(GaussianMixture, Error) {
   // Check for non-tree version.
   for (size_t mode : {0, 1}) {
     const HybridValues hv{vv, {{M(0), mode}}};
-    EXPECT_DOUBLES_EQUAL(conditionals[mode]->error(vv), mixture.error(hv),
-                         1e-8);
+    EXPECT_DOUBLES_EQUAL(conditionals[mode]->error(vv),
+                         hybrid_conditional.error(hv), 1e-8);
   }
 }
 
 /* ************************************************************************* */
 /// Check that the likelihood is proportional to the conditional density given
 /// the measurements.
-TEST(GaussianMixture, Likelihood) {
+TEST(HybridGaussianConditional, Likelihood) {
   using namespace equal_constants;
 
   // Compute likelihood
-  auto likelihood = mixture.likelihood(vv);
+  auto likelihood = hybrid_conditional.likelihood(vv);
 
-  // Check that the mixture error and the likelihood error are the same.
-  EXPECT_DOUBLES_EQUAL(mixture.error(hv0), likelihood->error(hv0), 1e-8);
-  EXPECT_DOUBLES_EQUAL(mixture.error(hv1), likelihood->error(hv1), 1e-8);
+  // Check that the hybrid conditional error and the likelihood error are the
+  // same.
+  EXPECT_DOUBLES_EQUAL(hybrid_conditional.error(hv0), likelihood->error(hv0),
+                       1e-8);
+  EXPECT_DOUBLES_EQUAL(hybrid_conditional.error(hv1), likelihood->error(hv1),
+                       1e-8);
 
   // Check that likelihood error is as expected, i.e., just the errors of the
   // individual likelihoods, in the `equal_constants` case.
@@ -139,46 +143,81 @@ TEST(GaussianMixture, Likelihood) {
   std::vector<double> ratio(2);
   for (size_t mode : {0, 1}) {
     const HybridValues hv{vv, {{M(0), mode}}};
-    ratio[mode] = std::exp(-likelihood->error(hv)) / mixture.evaluate(hv);
+    ratio[mode] =
+        std::exp(-likelihood->error(hv)) / hybrid_conditional.evaluate(hv);
   }
   EXPECT_DOUBLES_EQUAL(ratio[0], ratio[1], 1e-8);
 }
 
 /* ************************************************************************* */
 namespace mode_dependent_constants {
-// Create a GaussianMixture with mode-dependent noise models.
+// Create a HybridGaussianConditional with mode-dependent noise models.
 // 0 is low-noise, 1 is high-noise.
 const std::vector<GaussianConditional::shared_ptr> conditionals{
     GaussianConditional::sharedMeanAndStddev(Z(0), I_1x1, X(0), Vector1(0.0),
                                              0.5),
     GaussianConditional::sharedMeanAndStddev(Z(0), I_1x1, X(0), Vector1(0.0),
                                              3.0)};
-const GaussianMixture mixture({Z(0)}, {X(0)}, {mode}, conditionals);
+const HybridGaussianConditional hybrid_conditional({Z(0)}, {X(0)}, mode,
+                                                   conditionals);
 }  // namespace mode_dependent_constants
 
 /* ************************************************************************* */
 // Create a test for continuousParents.
-TEST(GaussianMixture, ContinuousParents) {
+TEST(HybridGaussianConditional, ContinuousParents) {
   using namespace mode_dependent_constants;
-  const KeyVector continuousParentKeys = mixture.continuousParents();
+  const KeyVector continuousParentKeys = hybrid_conditional.continuousParents();
   // Check that the continuous parent keys are correct:
   EXPECT(continuousParentKeys.size() == 1);
   EXPECT(continuousParentKeys[0] == X(0));
 }
 
 /* ************************************************************************* */
+/// Check error with mode dependent constants.
+TEST(HybridGaussianConditional, Error2) {
+  using namespace mode_dependent_constants;
+  auto actual = hybrid_conditional.errorTree(vv);
+
+  // Check result.
+  DiscreteKeys discrete_keys{mode};
+  double logNormalizer0 = -conditionals[0]->logNormalizationConstant();
+  double logNormalizer1 = -conditionals[1]->logNormalizationConstant();
+  double minLogNormalizer = std::min(logNormalizer0, logNormalizer1);
+
+  // Expected error is e(X) + log(|2πΣ|).
+  // We normalize log(|2πΣ|) with min(logNormalizers) so it is non-negative.
+  std::vector<double> leaves = {
+      conditionals[0]->error(vv) + logNormalizer0 - minLogNormalizer,
+      conditionals[1]->error(vv) + logNormalizer1 - minLogNormalizer};
+  AlgebraicDecisionTree<Key> expected(discrete_keys, leaves);
+
+  EXPECT(assert_equal(expected, actual, 1e-6));
+
+  // Check for non-tree version.
+  for (size_t mode : {0, 1}) {
+    const HybridValues hv{vv, {{M(0), mode}}};
+    EXPECT_DOUBLES_EQUAL(conditionals[mode]->error(vv) -
+                             conditionals[mode]->logNormalizationConstant() -
+                             minLogNormalizer,
+                         hybrid_conditional.error(hv), 1e-8);
+  }
+}
+
+/* ************************************************************************* */
 /// Check that the likelihood is proportional to the conditional density given
 /// the measurements.
-TEST(GaussianMixture, Likelihood2) {
+TEST(HybridGaussianConditional, Likelihood2) {
   using namespace mode_dependent_constants;
 
   // Compute likelihood
-  auto likelihood = mixture.likelihood(vv);
+  auto likelihood = hybrid_conditional.likelihood(vv);
 
-  // Check that the mixture error and the likelihood error are as expected,
-  // this invariant is the same as the equal noise case:
-  EXPECT_DOUBLES_EQUAL(mixture.error(hv0), likelihood->error(hv0), 1e-8);
-  EXPECT_DOUBLES_EQUAL(mixture.error(hv1), likelihood->error(hv1), 1e-8);
+  // Check that the hybrid conditional error and the likelihood error are as
+  // expected, this invariant is the same as the equal noise case:
+  EXPECT_DOUBLES_EQUAL(hybrid_conditional.error(hv0), likelihood->error(hv0),
+                       1e-8);
+  EXPECT_DOUBLES_EQUAL(hybrid_conditional.error(hv1), likelihood->error(hv1),
+                       1e-8);
 
   // Check the detailed JacobianFactor calculation for mode==1.
   {
@@ -191,7 +230,7 @@ TEST(GaussianMixture, Likelihood2) {
     CHECK(jf1->rows() == 2);
 
     // Check that the constant C1 is properly encoded in the JacobianFactor.
-    const double C1 = mixture.logNormalizationConstant() -
+    const double C1 = hybrid_conditional.logNormalizationConstant() -
                       conditionals[1]->logNormalizationConstant();
     const double c1 = std::sqrt(2.0 * C1);
     Vector expected_unwhitened(2);
@@ -205,15 +244,16 @@ TEST(GaussianMixture, Likelihood2) {
     Vector actual_whitened = jf1->error_vector(vv);
     EXPECT(assert_equal(expected_whitened, actual_whitened));
 
-    // Check that the error is equal to the mixture error:
-    EXPECT_DOUBLES_EQUAL(mixture.error(hv1), jf1->error(hv1), 1e-8);
+    // Check that the error is equal to the conditional error:
+    EXPECT_DOUBLES_EQUAL(hybrid_conditional.error(hv1), jf1->error(hv1), 1e-8);
   }
 
   // Check that the ratio of probPrime to evaluate is the same for all modes.
   std::vector<double> ratio(2);
   for (size_t mode : {0, 1}) {
     const HybridValues hv{vv, {{M(0), mode}}};
-    ratio[mode] = std::exp(-likelihood->error(hv)) / mixture.evaluate(hv);
+    ratio[mode] =
+        std::exp(-likelihood->error(hv)) / hybrid_conditional.evaluate(hv);
   }
   EXPECT_DOUBLES_EQUAL(ratio[0], ratio[1], 1e-8);
 }

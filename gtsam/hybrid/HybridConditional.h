@@ -18,8 +18,8 @@
 #pragma once
 
 #include <gtsam/discrete/DiscreteConditional.h>
-#include <gtsam/hybrid/GaussianMixture.h>
 #include <gtsam/hybrid/HybridFactor.h>
+#include <gtsam/hybrid/HybridGaussianConditional.h>
 #include <gtsam/hybrid/HybridGaussianFactorGraph.h>
 #include <gtsam/inference/Conditional.h>
 #include <gtsam/inference/Key.h>
@@ -39,7 +39,7 @@ namespace gtsam {
  * As a type-erased variant of:
  * - DiscreteConditional
  * - GaussianConditional
- * - GaussianMixture
+ * - HybridGaussianConditional
  *
  * The reason why this is important is that `Conditional<T>` is a CRTP class.
  * CRTP is static polymorphism such that all CRTP classes, while bearing the
@@ -124,10 +124,11 @@ class GTSAM_EXPORT HybridConditional
   /**
    * @brief Construct a new Hybrid Conditional object
    *
-   * @param gaussianMixture Gaussian Mixture Conditional used to create the
+   * @param hybridGaussianCond Hybrid Gaussian Conditional used to create the
    * HybridConditional.
    */
-  HybridConditional(const std::shared_ptr<GaussianMixture>& gaussianMixture);
+  HybridConditional(
+      const std::shared_ptr<HybridGaussianConditional>& hybridGaussianCond);
 
   /// @}
   /// @name Testable
@@ -146,12 +147,12 @@ class GTSAM_EXPORT HybridConditional
   /// @{
 
   /**
-   * @brief Return HybridConditional as a GaussianMixture
-   * @return nullptr if not a mixture
-   * @return GaussianMixture::shared_ptr otherwise
+   * @brief Return HybridConditional as a HybridGaussianConditional
+   * @return nullptr if not a conditional
+   * @return HybridGaussianConditional::shared_ptr otherwise
    */
-  GaussianMixture::shared_ptr asMixture() const {
-    return std::dynamic_pointer_cast<GaussianMixture>(inner_);
+  HybridGaussianConditional::shared_ptr asHybrid() const {
+    return std::dynamic_pointer_cast<HybridGaussianConditional>(inner_);
   }
 
   /**
@@ -222,8 +223,10 @@ class GTSAM_EXPORT HybridConditional
       boost::serialization::void_cast_register<GaussianConditional, Factor>(
           static_cast<GaussianConditional*>(NULL), static_cast<Factor*>(NULL));
     } else {
-      boost::serialization::void_cast_register<GaussianMixture, Factor>(
-          static_cast<GaussianMixture*>(NULL), static_cast<Factor*>(NULL));
+      boost::serialization::void_cast_register<HybridGaussianConditional,
+                                               Factor>(
+          static_cast<HybridGaussianConditional*>(NULL),
+          static_cast<Factor*>(NULL));
     }
   }
 #endif

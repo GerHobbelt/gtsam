@@ -10,7 +10,7 @@
  * -------------------------------------------------------------------------- */
 
 /**
- * @file   GaussianMixtureFactor.h
+ * @file   HybridGaussianFactor.h
  * @brief  A set of GaussianFactors, indexed by a set of discrete keys.
  * @author Fan Jiang
  * @author Varun Agrawal
@@ -33,26 +33,40 @@ class HybridValues;
 class DiscreteValues;
 class VectorValues;
 
+/// Alias for pair of GaussianFactor::shared_pointer and a double value.
+using GaussianFactorValuePair = std::pair<GaussianFactor::shared_ptr, double>;
+
 /**
- * @brief Implementation of a discrete conditional mixture factor.
+ * @brief Implementation of a discrete-conditioned hybrid factor.
  * Implements a joint discrete-continuous factor where the discrete variable
- * serves to "select" a mixture component corresponding to a GaussianFactor type
- * of measurement.
+ * serves to "select" a component corresponding to a GaussianFactor.
  *
- * Represents the underlying Gaussian mixture as a Decision Tree, where the set
- * of discrete variables indexes to the continuous gaussian distribution.
+ * Represents the underlying hybrid Gaussian components as a Decision Tree,
+ * where the set of discrete variables indexes to
+ * the continuous gaussian distribution.
+ *
+ * In factor graphs the error function typically returns 0.5*|A*x - b|^2, i.e.,
+ * the negative log-likelihood for a Gaussian noise model.
+ * In hybrid factor graphs we allow *adding* an arbitrary scalar dependent on
+ * the discrete assignment.
+ * For example, adding a 70/30 mode probability is supported by providing the
+ * scalars $-log(.7)$ and $-log(.3)$.
+ * Note that adding a common constant will not make any difference in the
+ * optimization, so $-log(70)$ and $-log(30)$ work just as well.
  *
  * @ingroup hybrid
  */
-class GTSAM_EXPORT GaussianMixtureFactor : public HybridFactor {
+class GTSAM_EXPORT HybridGaussianFactor : public HybridFactor {
  public:
   using Base = HybridFactor;
-  using This = GaussianMixtureFactor;
+  using This = HybridGaussianFactor;
   using shared_ptr = std::shared_ptr<This>;
 
   using sharedFactor = std::shared_ptr<GaussianFactor>;
 
-  /// typedef for Decision Tree of Gaussian factors and log-constant.
+  /// typedef for Decision Tree of Gaussian factors and arbitrary value.
+  using FactorValuePairs = DecisionTree<Key, GaussianFactorValuePair>;
+  /// typedef for Decision Tree of Gaussian factors.
   using Factors = DecisionTree<Key, sharedFactor>;
 
  private:
@@ -72,34 +86,34 @@ class GTSAM_EXPORT GaussianMixtureFactor : public HybridFactor {
   /// @{
 
   /// Default constructor, mainly for serialization.
-  GaussianMixtureFactor() = default;
+  HybridGaussianFactor() = default;
 
   /**
-   * @brief Construct a new Gaussian mixture factor.
+   * @brief Construct a new hybrid Gaussian factor.
    *
    * @param continuousKeys A vector of keys representing continuous variables.
    * @param discreteKeys A vector of keys representing discrete variables and
    * their cardinalities.
-   * @param factors The decision tree of Gaussian factors stored
-   * as the mixture density.
+   * @param factors The decision tree of Gaussian factors and arbitrary scalars.
    */
-  GaussianMixtureFactor(const KeyVector &continuousKeys,
-                        const DiscreteKeys &discreteKeys,
-                        const Factors &factors);
+  HybridGaussianFactor(const KeyVector &continuousKeys,
+                       const DiscreteKeys &discreteKeys,
+                       const FactorValuePairs &factors);
 
   /**
-   * @brief Construct a new GaussianMixtureFactor object using a vector of
+   * @brief Construct a new HybridGaussianFactor object using a vector of
    * GaussianFactor shared pointers.
    *
    * @param continuousKeys Vector of keys for continuous factors.
-   * @param discreteKeys Vector of discrete keys.
-   * @param factors Vector of gaussian factor shared pointers.
+   * @param discreteKey The discrete key to index each component.
+   * @param factors Vector of gaussian factor shared pointers
+   *  and arbitrary scalars. Same size as the cardinality of discreteKey.
    */
-  GaussianMixtureFactor(const KeyVector &continuousKeys,
-                        const DiscreteKeys &discreteKeys,
-                        const std::vector<sharedFactor> &factors)
-      : GaussianMixtureFactor(continuousKeys, discreteKeys,
-                              Factors(discreteKeys, factors)) {}
+  HybridGaussianFactor(const KeyVector &continuousKeys,
+                       const DiscreteKey &discreteKey,
+                       const std::vector<GaussianFactorValuePair> &factors)
+      : HybridGaussianFactor(continuousKeys, {discreteKey},
+                             FactorValuePairs({discreteKey}, factors)) {}
 
   /// @}
   /// @name Testable
@@ -128,7 +142,7 @@ class GTSAM_EXPORT GaussianMixtureFactor : public HybridFactor {
   GaussianFactorGraphTree add(const GaussianFactorGraphTree &sum) const;
 
   /**
-   * @brief Compute error of the GaussianMixtureFactor as a tree.
+   * @brief Compute error of the HybridGaussianFactor as a tree.
    *
    * @param continuousValues The continuous VectorValues.
    * @return AlgebraicDecisionTree<Key> A decision tree with the same keys
@@ -146,9 +160,9 @@ class GTSAM_EXPORT GaussianMixtureFactor : public HybridFactor {
   /// Getter for GaussianFactor decision tree
   const Factors &factors() const { return factors_; }
 
-  /// Add MixtureFactor to a Sum, syntactic sugar.
+  /// Add HybridNonlinearFactor to a Sum, syntactic sugar.
   friend GaussianFactorGraphTree &operator+=(
-      GaussianFactorGraphTree &sum, const GaussianMixtureFactor &factor) {
+      GaussianFactorGraphTree &sum, const HybridGaussianFactor &factor) {
     sum = factor.add(sum);
     return sum;
   }
@@ -168,7 +182,6 @@ class GTSAM_EXPORT GaussianMixtureFactor : public HybridFactor {
 
 // traits
 template <>
-struct traits<GaussianMixtureFactor> : public Testable<GaussianMixtureFactor> {
-};
+struct traits<HybridGaussianFactor> : public Testable<HybridGaussianFactor> {};
 
 }  // namespace gtsam

@@ -10,7 +10,7 @@
  * -------------------------------------------------------------------------- */
 
 /**
- * @file   GaussianMixtureFactor.cpp
+ * @file   HybridGaussianFactor.cpp
  * @brief  A set of Gaussian factors indexed by a set of discrete keys.
  * @author Fan Jiang
  * @author Varun Agrawal
@@ -21,21 +21,69 @@
 #include <gtsam/base/utilities.h>
 #include <gtsam/discrete/DecisionTree-inl.h>
 #include <gtsam/discrete/DecisionTree.h>
-#include <gtsam/hybrid/GaussianMixtureFactor.h>
+#include <gtsam/hybrid/HybridGaussianFactor.h>
 #include <gtsam/hybrid/HybridValues.h>
 #include <gtsam/linear/GaussianFactor.h>
 #include <gtsam/linear/GaussianFactorGraph.h>
 
 namespace gtsam {
 
-/* *******************************************************************************/
-GaussianMixtureFactor::GaussianMixtureFactor(const KeyVector &continuousKeys,
-                                             const DiscreteKeys &discreteKeys,
-                                             const Factors &factors)
-    : Base(continuousKeys, discreteKeys), factors_(factors) {}
+/**
+ * @brief Helper function to augment the [A|b] matrices in the factor components
+ * with the additional scalar values.
+ * This is done by storing the value in
+ * the `b` vector as an additional row.
+ *
+ * @param factors DecisionTree of GaussianFactors and arbitrary scalars.
+ * Gaussian factor in factors.
+ * @return HybridGaussianFactor::Factors
+ */
+HybridGaussianFactor::Factors augment(
+    const HybridGaussianFactor::FactorValuePairs &factors) {
+  // Find the minimum value so we can "proselytize" to positive values.
+  // Done because we can't have sqrt of negative numbers.
+  HybridGaussianFactor::Factors gaussianFactors;
+  AlgebraicDecisionTree<Key> valueTree;
+  std::tie(gaussianFactors, valueTree) = unzip(factors);
+
+  // Compute minimum value for normalization.
+  double min_value = valueTree.min();
+
+  // Finally, update the [A|b] matrices.
+  auto update = [&min_value](const GaussianFactorValuePair &gfv) {
+    auto [gf, value] = gfv;
+
+    auto jf = std::dynamic_pointer_cast<JacobianFactor>(gf);
+    if (!jf) return gf;
+
+    double normalized_value = value - min_value;
+
+    // If the value is 0, do nothing
+    if (normalized_value == 0.0) return gf;
+
+    GaussianFactorGraph gfg;
+    gfg.push_back(jf);
+
+    Vector c(1);
+    // When hiding c inside the `b` vector, value == 0.5*c^2
+    c << std::sqrt(2.0 * normalized_value);
+    auto constantFactor = std::make_shared<JacobianFactor>(c);
+
+    gfg.push_back(constantFactor);
+    return std::dynamic_pointer_cast<GaussianFactor>(
+        std::make_shared<JacobianFactor>(gfg));
+  };
+  return HybridGaussianFactor::Factors(factors, update);
+}
 
 /* *******************************************************************************/
-bool GaussianMixtureFactor::equals(const HybridFactor &lf, double tol) const {
+HybridGaussianFactor::HybridGaussianFactor(const KeyVector &continuousKeys,
+                                           const DiscreteKeys &discreteKeys,
+                                           const FactorValuePairs &factors)
+    : Base(continuousKeys, discreteKeys), factors_(augment(factors)) {}
+
+/* *******************************************************************************/
+bool HybridGaussianFactor::equals(const HybridFactor &lf, double tol) const {
   const This *e = dynamic_cast<const This *>(&lf);
   if (e == nullptr) return false;
 
@@ -52,10 +100,10 @@ bool GaussianMixtureFactor::equals(const HybridFactor &lf, double tol) const {
 }
 
 /* *******************************************************************************/
-void GaussianMixtureFactor::print(const std::string &s,
-                                  const KeyFormatter &formatter) const {
+void HybridGaussianFactor::print(const std::string &s,
+                                 const KeyFormatter &formatter) const {
   std::cout << (s.empty() ? "" : s + "\n");
-  std::cout << "GaussianMixtureFactor" << std::endl;
+  std::cout << "HybridGaussianFactor" << std::endl;
   HybridFactor::print("", formatter);
   std::cout << "{\n";
   if (factors_.empty()) {
@@ -78,13 +126,13 @@ void GaussianMixtureFactor::print(const std::string &s,
 }
 
 /* *******************************************************************************/
-GaussianMixtureFactor::sharedFactor GaussianMixtureFactor::operator()(
+HybridGaussianFactor::sharedFactor HybridGaussianFactor::operator()(
     const DiscreteValues &assignment) const {
   return factors_(assignment);
 }
 
 /* *******************************************************************************/
-GaussianFactorGraphTree GaussianMixtureFactor::add(
+GaussianFactorGraphTree HybridGaussianFactor::add(
     const GaussianFactorGraphTree &sum) const {
   using Y = GaussianFactorGraph;
   auto add = [](const Y &graph1, const Y &graph2) {
@@ -97,14 +145,14 @@ GaussianFactorGraphTree GaussianMixtureFactor::add(
 }
 
 /* *******************************************************************************/
-GaussianFactorGraphTree GaussianMixtureFactor::asGaussianFactorGraphTree()
+GaussianFactorGraphTree HybridGaussianFactor::asGaussianFactorGraphTree()
     const {
   auto wrap = [](const sharedFactor &gf) { return GaussianFactorGraph{gf}; };
   return {factors_, wrap};
 }
 
 /* *******************************************************************************/
-AlgebraicDecisionTree<Key> GaussianMixtureFactor::errorTree(
+AlgebraicDecisionTree<Key> HybridGaussianFactor::errorTree(
     const VectorValues &continuousValues) const {
   // functor to convert from sharedFactor to double error value.
   auto errorFunc = [&continuousValues](const sharedFactor &gf) {
@@ -115,7 +163,7 @@ AlgebraicDecisionTree<Key> GaussianMixtureFactor::errorTree(
 }
 
 /* *******************************************************************************/
-double GaussianMixtureFactor::error(const HybridValues &values) const {
+double HybridGaussianFactor::error(const HybridValues &values) const {
   const sharedFactor gf = factors_(values.discrete());
   return gf->error(values.continuous());
 }

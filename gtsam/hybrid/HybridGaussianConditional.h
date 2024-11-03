@@ -10,7 +10,7 @@
  * -------------------------------------------------------------------------- */
 
 /**
- * @file   GaussianMixture.h
+ * @file   HybridGaussianConditional.h
  * @brief  A hybrid conditional in the Conditional Linear Gaussian scheme
  * @author Fan Jiang
  * @author Varun Agrawal
@@ -23,8 +23,8 @@
 #include <gtsam/discrete/DecisionTree.h>
 #include <gtsam/discrete/DecisionTreeFactor.h>
 #include <gtsam/discrete/DiscreteKey.h>
-#include <gtsam/hybrid/GaussianMixtureFactor.h>
 #include <gtsam/hybrid/HybridFactor.h>
+#include <gtsam/hybrid/HybridGaussianFactor.h>
 #include <gtsam/inference/Conditional.h>
 #include <gtsam/linear/GaussianConditional.h>
 
@@ -33,8 +33,8 @@ namespace gtsam {
 class HybridValues;
 
 /**
- * @brief A conditional of gaussian mixtures indexed by discrete variables, as
- * part of a Bayes Network. This is the result of the elimination of a
+ * @brief A conditional of gaussian conditionals indexed by discrete variables,
+ * as part of a Bayes Network. This is the result of the elimination of a
  * continuous variable in a hybrid scheme, such that the remaining variables are
  * discrete+continuous.
  *
@@ -50,24 +50,26 @@ class HybridValues;
  *
  * @ingroup hybrid
  */
-class GTSAM_EXPORT GaussianMixture
-    : public HybridFactor,
-      public Conditional<HybridFactor, GaussianMixture> {
+class GTSAM_EXPORT HybridGaussianConditional
+    : public HybridGaussianFactor,
+      public Conditional<HybridGaussianFactor, HybridGaussianConditional> {
  public:
-  using This = GaussianMixture;
-  using shared_ptr = std::shared_ptr<GaussianMixture>;
-  using BaseFactor = HybridFactor;
-  using BaseConditional = Conditional<HybridFactor, GaussianMixture>;
+  using This = HybridGaussianConditional;
+  using shared_ptr = std::shared_ptr<This>;
+  using BaseFactor = HybridGaussianFactor;
+  using BaseConditional = Conditional<BaseFactor, HybridGaussianConditional>;
 
   /// typedef for Decision Tree of Gaussian Conditionals
   using Conditionals = DecisionTree<Key, GaussianConditional::shared_ptr>;
 
  private:
   Conditionals conditionals_;  ///< a decision tree of Gaussian conditionals.
-  double logConstant_;         ///< log of the normalization constant.
+  ///< Negative-log of the normalization constant (log(\sqrt(|2πΣ|))).
+  ///< Take advantage of the neg-log space so everything is a minimization
+  double logConstant_;
 
   /**
-   * @brief Convert a GaussianMixture of conditionals into
+   * @brief Convert a HybridGaussianConditional of conditionals into
    * a DecisionTree of Gaussian factor graphs.
    */
   GaussianFactorGraphTree asGaussianFactorGraphTree() const;
@@ -88,10 +90,10 @@ class GTSAM_EXPORT GaussianMixture
   /// @{
 
   /// Default constructor, mainly for serialization.
-  GaussianMixture() = default;
+  HybridGaussianConditional() = default;
 
   /**
-   * @brief Construct a new GaussianMixture object.
+   * @brief Construct a new HybridGaussianConditional object.
    *
    * @param continuousFrontals the continuous frontals.
    * @param continuousParents the continuous parents.
@@ -101,34 +103,25 @@ class GTSAM_EXPORT GaussianMixture
    * cardinality of the DiscreteKeys in discreteParents, since the
    * discreteParents will be used as the labels in the decision tree.
    */
-  GaussianMixture(const KeyVector &continuousFrontals,
-                  const KeyVector &continuousParents,
-                  const DiscreteKeys &discreteParents,
-                  const Conditionals &conditionals);
+  HybridGaussianConditional(const KeyVector &continuousFrontals,
+                            const KeyVector &continuousParents,
+                            const DiscreteKeys &discreteParents,
+                            const Conditionals &conditionals);
 
   /**
-   * @brief Make a Gaussian Mixture from a list of Gaussian conditionals
+   * @brief Make a Hybrid Gaussian Conditional from a vector of Gaussian
+   * conditionals. The DecisionTree-based constructor is preferred over this
+   * one.
    *
    * @param continuousFrontals The continuous frontal variables
    * @param continuousParents The continuous parent variables
-   * @param discreteParents Discrete parents variables
-   * @param conditionals List of conditionals
+   * @param discreteParent Single discrete parent variable
+   * @param conditionals Vector of conditionals with the same size as the
+   * cardinality of the discrete parent.
    */
-  GaussianMixture(KeyVector &&continuousFrontals, KeyVector &&continuousParents,
-                  DiscreteKeys &&discreteParents,
-                  std::vector<GaussianConditional::shared_ptr> &&conditionals);
-
-  /**
-   * @brief Make a Gaussian Mixture from a list of Gaussian conditionals
-   *
-   * @param continuousFrontals The continuous frontal variables
-   * @param continuousParents The continuous parent variables
-   * @param discreteParents Discrete parents variables
-   * @param conditionals List of conditionals
-   */
-  GaussianMixture(
+  HybridGaussianConditional(
       const KeyVector &continuousFrontals, const KeyVector &continuousParents,
-      const DiscreteKeys &discreteParents,
+      const DiscreteKey &discreteParent,
       const std::vector<GaussianConditional::shared_ptr> &conditionals);
 
   /// @}
@@ -140,7 +133,7 @@ class GTSAM_EXPORT GaussianMixture
 
   /// Print utility
   void print(
-      const std::string &s = "GaussianMixture\n",
+      const std::string &s = "HybridGaussianConditional\n",
       const KeyFormatter &formatter = DefaultKeyFormatter) const override;
 
   /// @}
@@ -159,20 +152,20 @@ class GTSAM_EXPORT GaussianMixture
 
   /// The log normalization constant is max of the the individual
   /// log-normalization constants.
-  double logNormalizationConstant() const override { return logConstant_; }
+  double logNormalizationConstant() const override { return -logConstant_; }
 
   /**
-   * Create a likelihood factor for a Gaussian mixture, return a Mixture factor
-   * on the parents.
+   * Create a likelihood factor for a hybrid Gaussian conditional,
+   * return a hybrid Gaussian factor on the parents.
    */
-  std::shared_ptr<GaussianMixtureFactor> likelihood(
+  std::shared_ptr<HybridGaussianFactor> likelihood(
       const VectorValues &given) const;
 
   /// Getter for the underlying Conditionals DecisionTree
   const Conditionals &conditionals() const;
 
   /**
-   * @brief Compute logProbability of the GaussianMixture as a tree.
+   * @brief Compute logProbability of the HybridGaussianConditional as a tree.
    *
    * @param continuousValues The continuous VectorValues.
    * @return AlgebraicDecisionTree<Key> A decision tree with the same keys
@@ -182,9 +175,9 @@ class GTSAM_EXPORT GaussianMixture
       const VectorValues &continuousValues) const;
 
   /**
-   * @brief Compute the error of this Gaussian Mixture.
+   * @brief Compute the error of this hybrid Gaussian conditional.
    *
-   * This requires some care, as different mixture components may have
+   * This requires some care, as different components may have
    * different normalization constants. Let's consider p(x|y,m), where m is
    * discrete. We need the error to satisfy the invariant:
    *
@@ -209,7 +202,7 @@ class GTSAM_EXPORT GaussianMixture
   double error(const HybridValues &values) const override;
 
   /**
-   * @brief Compute error of the GaussianMixture as a tree.
+   * @brief Compute error of the HybridGaussianConditional as a tree.
    *
    * @param continuousValues The continuous VectorValues.
    * @return AlgebraicDecisionTree<Key> A decision tree on the discrete keys
@@ -219,7 +212,7 @@ class GTSAM_EXPORT GaussianMixture
       const VectorValues &continuousValues) const;
 
   /**
-   * @brief Compute the logProbability of this Gaussian Mixture.
+   * @brief Compute the logProbability of this hybrid Gaussian conditional.
    *
    * @param values Continuous values and discrete assignment.
    * @return double
@@ -242,14 +235,6 @@ class GTSAM_EXPORT GaussianMixture
    */
   void prune(const DecisionTreeFactor &discreteProbs);
 
-  /**
-   * @brief Merge the Gaussian Factor Graphs in `this` and `sum` while
-   * maintaining the decision tree structure.
-   *
-   * @param sum Decision Tree of Gaussian Factor Graphs
-   * @return GaussianFactorGraphTree
-   */
-  GaussianFactorGraphTree add(const GaussianFactorGraphTree &sum) const;
   /// @}
 
  private:
@@ -277,6 +262,7 @@ std::set<DiscreteKey> DiscreteKeysAsSet(const DiscreteKeys &discreteKeys);
 
 // traits
 template <>
-struct traits<GaussianMixture> : public Testable<GaussianMixture> {};
+struct traits<HybridGaussianConditional>
+    : public Testable<HybridGaussianConditional> {};
 
 }  // namespace gtsam
