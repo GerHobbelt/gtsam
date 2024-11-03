@@ -52,11 +52,11 @@ BOOST_CLASS_EXPORT_GUID(ADT::Leaf, "gtsam_AlgebraicDecisionTree_Leaf");
 BOOST_CLASS_EXPORT_GUID(ADT::Choice, "gtsam_AlgebraicDecisionTree_Choice")
 
 BOOST_CLASS_EXPORT_GUID(HybridGaussianFactor, "gtsam_HybridGaussianFactor");
-BOOST_CLASS_EXPORT_GUID(HybridGaussianFactor::Factors,
+BOOST_CLASS_EXPORT_GUID(HybridGaussianFactor::FactorValuePairs,
                         "gtsam_HybridGaussianFactor_Factors");
-BOOST_CLASS_EXPORT_GUID(HybridGaussianFactor::Factors::Leaf,
+BOOST_CLASS_EXPORT_GUID(HybridGaussianFactor::FactorValuePairs::Leaf,
                         "gtsam_HybridGaussianFactor_Factors_Leaf");
-BOOST_CLASS_EXPORT_GUID(HybridGaussianFactor::Factors::Choice,
+BOOST_CLASS_EXPORT_GUID(HybridGaussianFactor::FactorValuePairs::Choice,
                         "gtsam_HybridGaussianFactor_Factors_Choice");
 
 BOOST_CLASS_EXPORT_GUID(HybridGaussianConditional,
@@ -75,7 +75,6 @@ BOOST_CLASS_EXPORT_GUID(HybridBayesNet, "gtsam_HybridBayesNet");
 /* ****************************************************************************/
 // Test HybridGaussianFactor serialization.
 TEST(HybridSerialization, HybridGaussianFactor) {
-  KeyVector continuousKeys{X(0)};
   DiscreteKey discreteKey{M(0), 2};
 
   auto A = Matrix::Zero(2, 1);
@@ -85,7 +84,7 @@ TEST(HybridSerialization, HybridGaussianFactor) {
   auto f1 = std::make_shared<JacobianFactor>(X(0), A, b1);
   std::vector<GaussianFactor::shared_ptr> factors{f0, f1};
 
-  const HybridGaussianFactor factor(continuousKeys, discreteKey, factors);
+  const HybridGaussianFactor factor(discreteKey, factors);
 
   EXPECT(equalsObj<HybridGaussianFactor>(factor));
   EXPECT(equalsXML<HybridGaussianFactor>(factor));
@@ -115,9 +114,7 @@ TEST(HybridSerialization, HybridGaussianConditional) {
       GaussianConditional::FromMeanAndStddev(Z(0), I, X(0), Vector1(0), 0.5));
   const auto conditional1 = std::make_shared<GaussianConditional>(
       GaussianConditional::FromMeanAndStddev(Z(0), I, X(0), Vector1(0), 3));
-  const HybridGaussianConditional gm({Z(0)}, {X(0)}, {mode},
-                                     HybridGaussianConditional::Conditionals(
-                                         {mode}, {conditional0, conditional1}));
+  const HybridGaussianConditional gm(mode, {conditional0, conditional1});
 
   EXPECT(equalsObj<HybridGaussianConditional>(gm));
   EXPECT(equalsXML<HybridGaussianConditional>(gm));

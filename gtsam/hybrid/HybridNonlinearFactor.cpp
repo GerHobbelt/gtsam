@@ -17,56 +17,79 @@
  */
 
 #include <gtsam/hybrid/HybridNonlinearFactor.h>
+#include <gtsam/linear/NoiseModel.h>
+#include <gtsam/nonlinear/NonlinearFactor.h>
+
+#include <memory>
 
 namespace gtsam {
 
 /* *******************************************************************************/
-static void checkKeys(const KeyVector& continuousKeys,
-                      const std::vector<NonlinearFactorValuePair>& pairs) {
-  KeySet factor_keys_set;
-  for (const auto& pair : pairs) {
-    auto f = pair.first;
-    // Insert all factor continuous keys in the continuous keys set.
-    std::copy(f->keys().begin(), f->keys().end(),
-              std::inserter(factor_keys_set, factor_keys_set.end()));
+struct HybridNonlinearFactor::ConstructorHelper {
+  KeyVector continuousKeys;   // Continuous keys extracted from factors
+  DiscreteKeys discreteKeys;  // Discrete keys provided to the constructors
+  FactorValuePairs factorTree;
+
+  void copyOrCheckContinuousKeys(const NoiseModelFactor::shared_ptr& factor) {
+    if (!factor) return;
+    if (continuousKeys.empty()) {
+      continuousKeys = factor->keys();
+    } else if (factor->keys() != continuousKeys) {
+      throw std::runtime_error(
+          "HybridNonlinearFactor: all factors should have the same keys!");
+    }
   }
 
-  KeySet continuous_keys_set(continuousKeys.begin(), continuousKeys.end());
-  if (continuous_keys_set != factor_keys_set) {
-    throw std::runtime_error(
-        "HybridNonlinearFactor: The specified continuous keys and the keys in "
-        "the factors do not match!");
+  ConstructorHelper(const DiscreteKey& discreteKey,
+                    const std::vector<NoiseModelFactor::shared_ptr>& factors)
+      : discreteKeys({discreteKey}) {
+    std::vector<NonlinearFactorValuePair> pairs;
+    // Extract continuous keys from the first non-null factor
+    for (const auto& factor : factors) {
+      pairs.emplace_back(factor, 0.0);
+      copyOrCheckContinuousKeys(factor);
+    }
+    factorTree = FactorValuePairs({discreteKey}, pairs);
   }
-}
+
+  ConstructorHelper(const DiscreteKey& discreteKey,
+                    const std::vector<NonlinearFactorValuePair>& pairs)
+      : discreteKeys({discreteKey}) {
+    // Extract continuous keys from the first non-null factor
+    for (const auto& pair : pairs) {
+      copyOrCheckContinuousKeys(pair.first);
+    }
+    factorTree = FactorValuePairs({discreteKey}, pairs);
+  }
+
+  ConstructorHelper(const DiscreteKeys& discreteKeys,
+                    const FactorValuePairs& factorPairs)
+      : discreteKeys(discreteKeys), factorTree(factorPairs) {
+    // Extract continuous keys from the first non-null factor
+    factorPairs.visit([&](const NonlinearFactorValuePair& pair) {
+      copyOrCheckContinuousKeys(pair.first);
+    });
+  }
+};
 
 /* *******************************************************************************/
-HybridNonlinearFactor::HybridNonlinearFactor(
-    const KeyVector& continuousKeys, const DiscreteKey& discreteKey,
-    const std::vector<NonlinearFactor::shared_ptr>& factors)
-    : Base(continuousKeys, {discreteKey}) {
-  std::vector<NonlinearFactorValuePair> pairs;
-  for (auto&& f : factors) {
-    pairs.emplace_back(f, 0.0);
-  }
-  checkKeys(continuousKeys, pairs);
-  factors_ = FactorValuePairs({discreteKey}, pairs);
-}
+HybridNonlinearFactor::HybridNonlinearFactor(const ConstructorHelper& helper)
+    : Base(helper.continuousKeys, helper.discreteKeys),
+      factors_(helper.factorTree) {}
 
-/* *******************************************************************************/
 HybridNonlinearFactor::HybridNonlinearFactor(
-    const KeyVector& continuousKeys, const DiscreteKey& discreteKey,
+    const DiscreteKey& discreteKey,
+    const std::vector<NoiseModelFactor::shared_ptr>& factors)
+    : HybridNonlinearFactor(ConstructorHelper(discreteKey, factors)) {}
+
+HybridNonlinearFactor::HybridNonlinearFactor(
+    const DiscreteKey& discreteKey,
     const std::vector<NonlinearFactorValuePair>& pairs)
-    : Base(continuousKeys, {discreteKey}) {
-  KeySet continuous_keys_set(continuousKeys.begin(), continuousKeys.end());
-  checkKeys(continuousKeys, pairs);
-  factors_ = FactorValuePairs({discreteKey}, pairs);
-}
+    : HybridNonlinearFactor(ConstructorHelper(discreteKey, pairs)) {}
 
-/* *******************************************************************************/
-HybridNonlinearFactor::HybridNonlinearFactor(const KeyVector& continuousKeys,
-                                             const DiscreteKeys& discreteKeys,
+HybridNonlinearFactor::HybridNonlinearFactor(const DiscreteKeys& discreteKeys,
                                              const FactorValuePairs& factors)
-    : Base(continuousKeys, discreteKeys), factors_(factors) {}
+    : HybridNonlinearFactor(ConstructorHelper(discreteKeys, factors)) {}
 
 /* *******************************************************************************/
 AlgebraicDecisionTree<Key> HybridNonlinearFactor::errorTree(
@@ -136,8 +159,7 @@ bool HybridNonlinearFactor::equals(const HybridFactor& other,
   // Ensure that this HybridNonlinearFactor and `f` have the same `factors_`.
   auto compare = [tol](const std::pair<sharedFactor, double>& a,
                        const std::pair<sharedFactor, double>& b) {
-    return traits<NonlinearFactor>::Equals(*a.first, *b.first, tol) &&
-           (a.second == b.second);
+    return a.first->equals(*b.first, tol) && (a.second == b.second);
   };
   if (!factors_.equals(f.factors_, compare)) return false;
 
@@ -163,13 +185,21 @@ std::shared_ptr<HybridGaussianFactor> HybridNonlinearFactor::linearize(
       [continuousValues](
           const std::pair<sharedFactor, double>& f) -> GaussianFactorValuePair {
     auto [factor, val] = f;
-    return {factor->linearize(continuousValues), val};
+    if (auto gaussian = std::dynamic_pointer_cast<noiseModel::Gaussian>(
+            factor->noiseModel())) {
+      return {factor->linearize(continuousValues),
+              val + gaussian->negLogConstant()};
+    } else {
+      throw std::runtime_error(
+          "HybridNonlinearFactor: linearize() only supports NoiseModelFactors "
+          "with Gaussian (or derived) noise models.");
+    }
   };
 
   DecisionTree<Key, std::pair<GaussianFactor::shared_ptr, double>>
       linearized_factors(factors_, linearizeDT);
 
-  return std::make_shared<HybridGaussianFactor>(continuousKeys_, discreteKeys_,
+  return std::make_shared<HybridGaussianFactor>(discreteKeys_,
                                                 linearized_factors);
 }
 
