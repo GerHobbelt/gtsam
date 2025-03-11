@@ -214,6 +214,15 @@ class GTSAM_EXPORT DiscreteConditional
    */
   size_t argmax(const DiscreteValues& parentsValues = DiscreteValues()) const;
 
+  /**
+   * @brief Create new factor by maximizing over all
+   * values with the same separator.
+   *
+   * @param keys The keys to sum over.
+   * @return DiscreteFactor::shared_ptr
+   */
+  virtual DiscreteFactor::shared_ptr max(const Ordering& keys) const;
+
   /// @}
   /// @name Advanced Interface
   /// @{
@@ -267,6 +276,9 @@ class GTSAM_EXPORT DiscreteConditional
    */
   double negLogConstant() const override;
 
+  /// Prune the conditional
+  virtual void prune(size_t maxNrAssignments);
+
   /// @}
 
  protected:
@@ -275,7 +287,7 @@ class GTSAM_EXPORT DiscreteConditional
                                   bool forceComplete) const;
 
  private:
-#ifdef GTSAM_ENABLE_BOOST_SERIALIZATION
+#if GTSAM_ENABLE_BOOST_SERIALIZATION
   /** Serialization function */
   friend class boost::serialization::access;
   template <class Archive>

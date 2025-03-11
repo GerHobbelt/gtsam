@@ -60,7 +60,10 @@ public:
   }
 
   /** copy constructor */
-  Pose2(const Pose2& pose) : r_(pose.r_), t_(pose.t_) {}
+  Pose2(const Pose2& pose) = default;
+  //  : r_(pose.r_), t_(pose.t_) {}
+
+  Pose2& operator=(const Pose2& other) = default;
 
   /**
    * construct from (x,y,theta)
@@ -339,7 +342,7 @@ public:
 
  private:
 
-#ifdef GTSAM_ENABLE_BOOST_SERIALIZATION  //
+#if GTSAM_ENABLE_BOOST_SERIALIZATION  //
   // Serialization function
   friend class boost::serialization::access;
   template<class Archive>

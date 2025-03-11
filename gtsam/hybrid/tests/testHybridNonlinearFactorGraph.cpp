@@ -368,10 +368,9 @@ TEST(HybridGaussianElimination, EliminateHybrid_2_Variable) {
   EXPECT_LONGS_EQUAL(1, hybridGaussianConditional->nrParents());
 
   // This is now a discreteFactor
-  auto discreteFactor = dynamic_pointer_cast<DecisionTreeFactor>(factorOnModes);
+  auto discreteFactor = dynamic_pointer_cast<TableFactor>(factorOnModes);
   CHECK(discreteFactor);
   EXPECT_LONGS_EQUAL(1, discreteFactor->discreteKeys().size());
-  EXPECT(discreteFactor->root_->isLeaf() == false);
 }
 
 /****************************************************************************
@@ -513,9 +512,10 @@ TEST(HybridNonlinearFactorGraph, Full_Elimination) {
   // P(m1)
   EXPECT(hybridBayesNet->at(4)->frontals() == KeyVector{M(1)});
   EXPECT_LONGS_EQUAL(0, hybridBayesNet->at(4)->nrParents());
+  TableDistribution dtc = *hybridBayesNet->at(4)->asDiscrete<TableDistribution>();
   EXPECT(
-      dynamic_pointer_cast<DiscreteConditional>(hybridBayesNet->at(4)->inner())
-          ->equals(*discreteBayesNet.at(1)));
+      DiscreteConditional(dtc.nrFrontals(), dtc.toDecisionTreeFactor())
+          .equals(*discreteBayesNet.at(1)));
 }
 
 /****************************************************************************

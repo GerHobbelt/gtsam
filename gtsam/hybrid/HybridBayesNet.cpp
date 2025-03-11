@@ -52,15 +52,22 @@ HybridBayesNet HybridBayesNet::prune(size_t maxNrLeaves) const {
   // Multiply into one big conditional. NOTE: possibly quite expensive.
   DiscreteConditional joint;
   for (auto &&conditional : marginal) {
-    joint = joint * (*conditional);
+    // The last discrete conditional may be a TableDistribution
+    if (auto dtc = std::dynamic_pointer_cast<TableDistribution>(conditional)) {
+      DiscreteConditional dc(dtc->nrFrontals(), dtc->toDecisionTreeFactor());
+      joint = joint * dc;
+    } else {
+      joint = joint * (*conditional);
+    }
   }
 
-  // Prune the joint. NOTE: again, possibly quite expensive.
-  const DecisionTreeFactor pruned = joint.prune(maxNrLeaves);
+  // Prune the joint. NOTE: imperative and, again, possibly quite expensive.
+  DiscreteConditional pruned(joint);
+  pruned.prune(maxNrLeaves);
 
   // Create a the result starting with the pruned joint.
   HybridBayesNet result;
-  result.emplace_shared<DiscreteConditional>(pruned.size(), pruned);
+  result.push_back(std::make_shared<DiscreteConditional>(pruned));
 
   /* To prune, we visitWith every leaf in the HybridGaussianConditional.
    * For each leaf, using the assignment we can check the discrete decision tree
@@ -126,7 +133,14 @@ HybridValues HybridBayesNet::optimize() const {
 
   for (auto &&conditional : *this) {
     if (conditional->isDiscrete()) {
-      discrete_fg.push_back(conditional->asDiscrete());
+      if (auto dtc = conditional->asDiscrete<TableDistribution>()) {
+        // The number of keys should be small so should not
+        // be expensive to convert to DiscreteConditional.
+        discrete_fg.push_back(DiscreteConditional(dtc->nrFrontals(),
+                                                  dtc->toDecisionTreeFactor()));
+      } else {
+        discrete_fg.push_back(conditional->asDiscrete());
+      }
     }
   }
 

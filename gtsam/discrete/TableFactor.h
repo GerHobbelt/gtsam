@@ -31,6 +31,12 @@
 #include <utility>
 #include <vector>
 
+#if GTSAM_ENABLE_BOOST_SERIALIZATION
+#include <gtsam/base/MatrixSerialization.h>
+
+#include <boost/serialization/nvp.hpp>
+#endif
+
 namespace gtsam {
 
 class DiscreteConditional;
@@ -80,6 +86,7 @@ class GTSAM_EXPORT TableFactor : public DiscreteFactor {
     return DiscreteKey(keys_[i], cardinalities_.at(keys_[i]));
   }
 
+ public:
   /**
    * Convert probability table given as doubles to SparseVector.
    * Example: {0, 1, 1, 0, 0, 1, 0} -> values: {1, 1, 1}, indices: {1, 2, 5}
@@ -91,7 +98,6 @@ class GTSAM_EXPORT TableFactor : public DiscreteFactor {
   static Eigen::SparseVector<double> Convert(const DiscreteKeys& keys,
                                              const std::string& table);
 
- public:
   // typedefs needed to play nice with gtsam
   typedef TableFactor This;
   typedef DiscreteFactor Base;  ///< Typedef to base class
@@ -342,6 +348,19 @@ class GTSAM_EXPORT TableFactor : public DiscreteFactor {
   double error(const HybridValues& values) const override;
 
   /// @}
+
+ private:
+#if GTSAM_ENABLE_BOOST_SERIALIZATION
+  /** Serialization function */
+  friend class boost::serialization::access;
+  template <class ARCHIVE>
+  void serialize(ARCHIVE& ar, const unsigned int /*version*/) {
+    ar& BOOST_SERIALIZATION_BASE_OBJECT_NVP(Base);
+    ar& BOOST_SERIALIZATION_NVP(sparse_table_);
+    ar& BOOST_SERIALIZATION_NVP(denominators_);
+    ar& BOOST_SERIALIZATION_NVP(sorted_dkeys_);
+  }
+#endif
 };
 
 // traits
