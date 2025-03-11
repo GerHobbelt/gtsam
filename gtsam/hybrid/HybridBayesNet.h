@@ -147,6 +147,14 @@ class GTSAM_EXPORT HybridBayesNet : public BayesNet<HybridConditional> {
   }
 
   /**
+   * @brief Compute the Most Probable Explanation (MPE)
+   * of the discrete variables.
+   *
+   * @return DiscreteValues
+   */
+  DiscreteValues mpe() const;
+
+  /**
    * @brief Solve the HybridBayesNet by first computing the MPE of all the
    * discrete variables and then optimizing the continuous variables based on
    * the MPE assignment.
@@ -209,9 +217,11 @@ class GTSAM_EXPORT HybridBayesNet : public BayesNet<HybridConditional> {
    * @brief Prune the Bayes Net such that we have at most maxNrLeaves leaves.
    *
    * @param maxNrLeaves Continuous values at which to compute the error.
+   * @param removeDeadModes Flag to enable removal of modes which only have a
+   * single possible assignment.
    * @return A pruned HybridBayesNet
    */
-  HybridBayesNet prune(size_t maxNrLeaves) const;
+  HybridBayesNet prune(size_t maxNrLeaves, bool removeDeadModes = false) const;
 
   /**
    * @brief Error method using HybridValues which returns specific error for

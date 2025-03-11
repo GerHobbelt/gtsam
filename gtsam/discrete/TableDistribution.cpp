@@ -45,20 +45,14 @@ static Eigen::SparseVector<double> normalizeSparseTable(
 
 /* ************************************************************************** */
 TableDistribution::TableDistribution(const TableFactor& f)
-    : BaseConditional(f.keys().size(),
-                      DecisionTreeFactor(f.discreteKeys(), ADT())),
-      table_(f / (*f.sum(f.keys().size()))) {}
-
-/* ************************************************************************** */
-TableDistribution::TableDistribution(
-    const DiscreteKeys& keys, const Eigen::SparseVector<double>& potentials)
-    : BaseConditional(keys.size(), keys, DecisionTreeFactor(keys, ADT())),
-      table_(TableFactor(keys, normalizeSparseTable(potentials))) {}
+    : BaseConditional(f.keys().size(), f.discreteKeys(), ADT(nullptr)),
+      table_(f / (*std::dynamic_pointer_cast<TableFactor>(
+                     f.sum(f.keys().size())))) {}
 
 /* ************************************************************************** */
 TableDistribution::TableDistribution(const DiscreteKeys& keys,
                                      const std::vector<double>& potentials)
-    : BaseConditional(keys.size(), keys, DecisionTreeFactor(keys, ADT())),
+    : BaseConditional(keys.size(), keys, ADT(nullptr)),
       table_(TableFactor(
           keys, normalizeSparseTable(TableFactor::Convert(keys, potentials)))) {
 }
@@ -66,26 +60,9 @@ TableDistribution::TableDistribution(const DiscreteKeys& keys,
 /* ************************************************************************** */
 TableDistribution::TableDistribution(const DiscreteKeys& keys,
                                      const std::string& potentials)
-    : BaseConditional(keys.size(), keys, DecisionTreeFactor(keys, ADT())),
+    : BaseConditional(keys.size(), keys, ADT(nullptr)),
       table_(TableFactor(
           keys, normalizeSparseTable(TableFactor::Convert(keys, potentials)))) {
-}
-
-/* **************************************************************************
- */
-TableDistribution::TableDistribution(const TableFactor& joint,
-                                     const TableFactor& marginal)
-    : BaseConditional(joint.size() - marginal.size(),
-                      joint.discreteKeys() & marginal.discreteKeys(), ADT()),
-      table_(joint / marginal) {}
-
-/* ************************************************************************** */
-TableDistribution::TableDistribution(const TableFactor& joint,
-                                     const TableFactor& marginal,
-                                     const Ordering& orderedKeys)
-    : TableDistribution(joint, marginal) {
-  keys_.clear();
-  keys_.insert(keys_.end(), orderedKeys.begin(), orderedKeys.end());
 }
 
 /* ************************************************************************** */
@@ -114,12 +91,33 @@ bool TableDistribution::equals(const DiscreteFactor& other, double tol) const {
 }
 
 /* ****************************************************************************/
+DiscreteFactor::shared_ptr TableDistribution::sum(size_t nrFrontals) const {
+  return table_.sum(nrFrontals);
+}
+
+/* ****************************************************************************/
+DiscreteFactor::shared_ptr TableDistribution::sum(const Ordering& keys) const {
+  return table_.sum(keys);
+}
+
+/* ****************************************************************************/
+DiscreteFactor::shared_ptr TableDistribution::max(size_t nrFrontals) const {
+  return table_.max(nrFrontals);
+}
+
+/* ****************************************************************************/
 DiscreteFactor::shared_ptr TableDistribution::max(const Ordering& keys) const {
   return table_.max(keys);
 }
 
+/* ****************************************************************************/
+DiscreteFactor::shared_ptr TableDistribution::operator/(
+    const DiscreteFactor::shared_ptr& f) const {
+  return table_ / f;
+}
+
 /* ************************************************************************ */
-uint64_t TableDistribution::argmax() const {
+DiscreteValues TableDistribution::argmax() const {
   uint64_t maxIdx = 0;
   double maxValue = 0.0;
 
@@ -132,12 +130,45 @@ uint64_t TableDistribution::argmax() const {
     }
   }
 
-  return maxIdx;
+  return table_.findAssignments(maxIdx);
 }
 
 /* ****************************************************************************/
 void TableDistribution::prune(size_t maxNrAssignments) {
   table_ = table_.prune(maxNrAssignments);
+}
+
+/* ****************************************************************************/
+size_t TableDistribution::sample(const DiscreteValues& parentsValues) const {
+  static mt19937 rng(2);  // random number generator
+
+  DiscreteKeys parentsKeys;
+  for (auto&& [key, _] : parentsValues) {
+    parentsKeys.push_back({key, table_.cardinality(key)});
+  }
+
+  // Get the correct conditional distribution: P(F|S=parentsValues)
+  TableFactor pFS = table_.choose(parentsValues, parentsKeys);
+
+  // TODO(Duy): only works for one key now, seems horribly slow this way
+  if (nrFrontals() != 1) {
+    throw std::invalid_argument(
+        "TableDistribution::sample can only be called on single variable "
+        "conditionals");
+  }
+  Key key = firstFrontalKey();
+  size_t nj = cardinality(key);
+  vector<double> p(nj);
+  DiscreteValues frontals;
+  for (size_t value = 0; value < nj; value++) {
+    frontals[key] = value;
+    p[value] = pFS(frontals);  // P(F=value|S=parentsValues)
+    if (p[value] == 1.0) {
+      return value;  // shortcut exit
+    }
+  }
+  std::discrete_distribution<size_t> distribution(p.begin(), p.end());
+  return distribution(rng);
 }
 
 }  // namespace gtsam

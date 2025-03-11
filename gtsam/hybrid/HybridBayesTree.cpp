@@ -45,15 +45,21 @@ bool HybridBayesTree::equals(const This& other, double tol) const {
 /* ************************************************************************* */
 DiscreteValues HybridBayesTree::discreteMaxProduct(
     const DiscreteFactorGraph& dfg) const {
-  TableFactor product = TableProduct(dfg);
+  DiscreteFactor::shared_ptr product = dfg.scaledProduct();
 
-  uint64_t maxIdx = TableDistribution(product).argmax();
-  DiscreteValues assignment = product.findAssignments(maxIdx);
+  // Check type of product, and get as TableFactor for efficiency.
+  TableFactor p;
+  if (auto tf = std::dynamic_pointer_cast<TableFactor>(product)) {
+    p = *tf;
+  } else {
+    p = TableFactor(product->toDecisionTreeFactor());
+  }
+  DiscreteValues assignment = TableDistribution(p).argmax();
   return assignment;
 }
 
 /* ************************************************************************* */
-HybridValues HybridBayesTree::optimize() const {
+DiscreteValues HybridBayesTree::mpe() const {
   DiscreteFactorGraph discrete_fg;
   DiscreteValues mpe;
 
@@ -67,10 +73,15 @@ HybridValues HybridBayesTree::optimize() const {
     discrete_fg.push_back(discrete);
     mpe = discreteMaxProduct(discrete_fg);
   } else {
-    throw std::runtime_error(
-        "HybridBayesTree root is not discrete-only. Please check elimination "
-        "ordering or use continuous factor graph.");
+    mpe = DiscreteValues();
   }
+
+  return mpe;
+}
+
+/* ************************************************************************* */
+HybridValues HybridBayesTree::optimize() const {
+  DiscreteValues mpe = this->mpe();
 
   VectorValues values = optimize(mpe);
   return HybridValues(values, mpe);

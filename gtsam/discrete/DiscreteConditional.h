@@ -54,7 +54,7 @@ class GTSAM_EXPORT DiscreteConditional
   DiscreteConditional() {}
 
   /// Construct from factor, taking the first `nFrontals` keys as frontals.
-  DiscreteConditional(size_t nFrontals, const DecisionTreeFactor& f);
+  DiscreteConditional(size_t nFrontals, const DiscreteFactor& f);
 
   /**
    * Construct from DiscreteKeys and AlgebraicDecisionTree, taking the first
@@ -199,7 +199,7 @@ class GTSAM_EXPORT DiscreteConditional
    * @param parentsValues Known values of the parents
    * @return sample from conditional
    */
-  size_t sample(const DiscreteValues& parentsValues) const;
+  virtual size_t sample(const DiscreteValues& parentsValues) const;
 
   /// Single parent version.
   size_t sample(size_t parent_value) const;
@@ -221,7 +221,7 @@ class GTSAM_EXPORT DiscreteConditional
    * @param keys The keys to sum over.
    * @return DiscreteFactor::shared_ptr
    */
-  virtual DiscreteFactor::shared_ptr max(const Ordering& keys) const;
+  virtual DiscreteFactor::shared_ptr max(const Ordering& keys) const override;
 
   /// @}
   /// @name Advanced Interface
@@ -278,6 +278,16 @@ class GTSAM_EXPORT DiscreteConditional
 
   /// Prune the conditional
   virtual void prune(size_t maxNrAssignments);
+
+  /**
+   * @brief Remove the discrete modes whose assignments are given to us.
+   * Only applies to discrete conditionals.
+   *
+   * Imperative method so we can update nodes in the Bayes net or Bayes tree.
+   *
+   * @param given The discrete modes whose assignments we know.
+   */
+  void removeDiscreteModes(const DiscreteValues& given);
 
   /// @}
 

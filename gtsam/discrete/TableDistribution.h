@@ -18,7 +18,6 @@
 #pragma once
 
 #include <gtsam/discrete/DiscreteConditional.h>
-#include <gtsam/discrete/Signature.h>
 #include <gtsam/discrete/TableFactor.h>
 #include <gtsam/inference/Conditional-inst.h>
 
@@ -62,12 +61,6 @@ class GTSAM_EXPORT TableDistribution : public DiscreteConditional {
   TableDistribution(const TableFactor& f);
 
   /**
-   * Construct from DiscreteKeys and SparseVector.
-   */
-  TableDistribution(const DiscreteKeys& keys,
-                    const Eigen::SparseVector<double>& potentials);
-
-  /**
    * Construct from DiscreteKeys and std::vector.
    */
   TableDistribution(const DiscreteKeys& keys,
@@ -83,27 +76,13 @@ class GTSAM_EXPORT TableDistribution : public DiscreteConditional {
   /**
    * Construct from DiscreteKey and std::string.
    */
-  TableDistribution(const DiscreteKeys& key, const std::string& potentials);
+  TableDistribution(const DiscreteKeys& keys, const std::string& potentials);
 
   /**
    * Construct from single DiscreteKey and std::string.
    */
   TableDistribution(const DiscreteKey& key, const std::string& potentials)
       : TableDistribution(DiscreteKeys(key), potentials) {}
-
-  /**
-   * @brief construct P(X|Y) = f(X,Y)/f(Y) from f(X,Y) and f(Y)
-   * Assumes but *does not check* that f(Y)=sum_X f(X,Y).
-   */
-  TableDistribution(const TableFactor& joint, const TableFactor& marginal);
-
-  /**
-   * @brief construct P(X|Y) = f(X,Y)/f(Y) from f(X,Y) and f(Y)
-   * Assumes but *does not check* that f(Y)=sum_X f(X,Y).
-   * Makes sure the keys are ordered as given. Does not check orderedKeys.
-   */
-  TableDistribution(const TableFactor& joint, const TableFactor& marginal,
-                    const Ordering& orderedKeys);
 
   /// @}
   /// @name Testable
@@ -131,21 +110,35 @@ class GTSAM_EXPORT TableDistribution : public DiscreteConditional {
     return table_.evaluate(values);
   }
 
-  /**
-   * @brief Create new factor by maximizing over all
-   * values with the same separator.
-   *
-   * @param keys The keys to sum over.
-   * @return DiscreteFactor::shared_ptr
-   */
-  virtual DiscreteFactor::shared_ptr max(const Ordering& keys) const override;
+  /// Create new factor by summing all values with the same separator values
+  DiscreteFactor::shared_ptr sum(size_t nrFrontals) const override;
+
+  /// Create new factor by summing all values with the same separator values
+  DiscreteFactor::shared_ptr sum(const Ordering& keys) const override;
+
+  /// Create new factor by maximizing over all values with the same separator.
+  DiscreteFactor::shared_ptr max(size_t nrFrontals) const override;
+
+  /// Create new factor by maximizing over all values with the same separator.
+  DiscreteFactor::shared_ptr max(const Ordering& keys) const override;
+
+  /// divide by DiscreteFactor::shared_ptr f (safely)
+  DiscreteFactor::shared_ptr operator/(
+      const DiscreteFactor::shared_ptr& f) const override;
 
   /**
    * @brief Return assignment that maximizes value.
    *
    * @return maximizing assignment for the variables.
    */
-  uint64_t argmax() const;
+  DiscreteValues argmax() const;
+
+  /**
+   * sample
+   * @param parentsValues Known values of the parents
+   * @return sample from conditional
+   */
+  virtual size_t sample(const DiscreteValues& parentsValues) const override;
 
   /// @}
   /// @name Advanced Interface
@@ -160,7 +153,7 @@ class GTSAM_EXPORT TableDistribution : public DiscreteConditional {
   }
 
   /// Get the number of non-zero values.
-  size_t nrValues() const { return table_.sparseTable().nonZeros(); }
+  uint64_t nrValues() const override { return table_.sparseTable().nonZeros(); }
 
   /// @}
 
