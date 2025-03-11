@@ -29,7 +29,21 @@ class GTSAM_EXPORT HybridSmoother {
   HybridBayesNet hybridBayesNet_;
   HybridGaussianFactorGraph remainingFactorGraph_;
 
+  /// The threshold above which we make a decision about a mode.
+  std::optional<double> marginalThreshold_;
+  DiscreteValues fixedValues_;
+
  public:
+  /**
+   * @brief Constructor
+   *
+   * @param removeDeadModes Flag indicating whether to remove dead modes.
+   * @param marginalThreshold The threshold above which a mode gets assigned a
+   * value and is considered "dead". 0.99 is a good starting value.
+   */
+  HybridSmoother(const std::optional<double> marginalThreshold = {})
+      : marginalThreshold_(marginalThreshold) {}
+
   /**
    * Given new factors, perform an incremental update.
    * The relevant densities in the `hybridBayesNet` will be added to the input
@@ -49,11 +63,24 @@ class GTSAM_EXPORT HybridSmoother {
    * @param given_ordering The (optional) ordering for elimination, only
    * continuous variables are allowed
    */
-  void update(HybridGaussianFactorGraph graph,
+  void update(const HybridGaussianFactorGraph& graph,
               std::optional<size_t> maxNrLeaves = {},
               const std::optional<Ordering> given_ordering = {});
 
-  Ordering getOrdering(const HybridGaussianFactorGraph& newFactors);
+  /**
+   * @brief Get an elimination ordering which eliminates continuous
+   * and then discrete.
+   *
+   * Expects `factors` to already have the necessary conditionals
+   * which were connected to the variables in the newly added factors.
+   * Those variables should be in `newFactorKeys`.
+   *
+   * @param factors All the new factors and connected conditionals.
+   * @param newFactorKeys The keys/variables in the newly added factors.
+   * @return Ordering
+   */
+  Ordering getOrdering(const HybridGaussianFactorGraph& factors,
+                       const KeySet& newFactorKeys);
 
   /**
    * @brief Add conditionals from previous timestep as part of liquefication.
@@ -66,7 +93,7 @@ class GTSAM_EXPORT HybridSmoother {
    */
   std::pair<HybridGaussianFactorGraph, HybridBayesNet> addConditionals(
       const HybridGaussianFactorGraph& graph,
-      const HybridBayesNet& hybridBayesNet, const Ordering& ordering) const;
+      const HybridBayesNet& hybridBayesNet) const;
 
   /**
    * @brief Get the hybrid Gaussian conditional from
@@ -79,6 +106,9 @@ class GTSAM_EXPORT HybridSmoother {
 
   /// Return the Bayes Net posterior.
   const HybridBayesNet& hybridBayesNet() const;
+
+  /// Optimize the hybrid Bayes Net, taking into accound fixed values.
+  HybridValues optimize() const;
 };
 
 }  // namespace gtsam

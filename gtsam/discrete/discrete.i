@@ -268,6 +268,10 @@ class DiscreteBayesTreeClique {
 
 class DiscreteBayesTree {
   DiscreteBayesTree();
+  void insertRoot(const gtsam::DiscreteBayesTreeClique* subtree);
+  void addClique(const gtsam::DiscreteBayesTreeClique* clique);
+  void addClique(const gtsam::DiscreteBayesTreeClique* clique, const gtsam::DiscreteBayesTreeClique* parent_clique);
+
   void print(string s = "DiscreteBayesTree\n",
              const gtsam::KeyFormatter& keyFormatter =
                  gtsam::DefaultKeyFormatter) const;
@@ -276,6 +280,12 @@ class DiscreteBayesTree {
   size_t size() const;
   bool empty() const;
   const DiscreteBayesTreeClique* operator[](size_t j) const;
+  const DiscreteBayesTreeClique* clique(size_t j) const;
+  size_t numCachedSeparatorMarginals() const;
+
+  gtsam::DiscreteConditional marginalFactor(size_t key) const;
+  gtsam::DiscreteFactorGraph* joint(size_t j1, size_t j2) const;
+  gtsam::DiscreteBayesNet* jointBayesNet(size_t j1, size_t j2) const;
 
   double evaluate(const gtsam::DiscreteValues& values) const;
   double operator()(const gtsam::DiscreteValues& values) const;
@@ -285,7 +295,6 @@ class DiscreteBayesTree {
   void saveGraph(string s,
                 const gtsam::KeyFormatter& keyFormatter =
                  gtsam::DefaultKeyFormatter) const;
-  double operator()(const gtsam::DiscreteValues& values) const;
 
   string markdown(const gtsam::KeyFormatter& keyFormatter =
                  gtsam::DefaultKeyFormatter) const;
@@ -453,6 +462,31 @@ class DiscreteJunctionTree {
       const gtsam::KeyFormatter& formatter = gtsam::DefaultKeyFormatter) const;
   size_t nrRoots() const;
   const gtsam::DiscreteCluster& operator[](size_t i) const;
+};
+
+#include <gtsam/discrete/DiscreteSearch.h>
+class DiscreteSearchSolution {
+  double error;
+  gtsam::DiscreteValues assignment;
+  DiscreteSearchSolution(double error, const gtsam::DiscreteValues& assignment);
+};
+
+class DiscreteSearch {
+  static DiscreteSearch FromFactorGraph(const gtsam::DiscreteFactorGraph& factorGraph,
+                                        const gtsam::Ordering& ordering,
+                                        bool buildJunctionTree = false);
+
+  DiscreteSearch(const gtsam::DiscreteEliminationTree& etree);
+  DiscreteSearch(const gtsam::DiscreteJunctionTree& junctionTree);
+  DiscreteSearch(const gtsam::DiscreteBayesNet& bayesNet);
+  DiscreteSearch(const gtsam::DiscreteBayesTree& bayesTree);
+
+  void print(string name = "DiscreteSearch: ",
+             const gtsam::KeyFormatter& formatter = gtsam::DefaultKeyFormatter) const;
+
+  double lowerBound() const;
+
+  std::vector<gtsam::DiscreteSearchSolution> run(size_t K = 1) const;
 };
 
 }  // namespace gtsam
