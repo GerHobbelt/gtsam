@@ -1,4 +1,4 @@
-/build*
+/build
 /debug*
 .idea
 *.pyc
@@ -20,3 +20,6 @@ xcode/
 /Dockerfile
 /python/gtsam/notebooks/.ipynb_checkpoints/ellipses-checkpoint.ipynb
 .cache/
+
+# MyST build outputs
+_build

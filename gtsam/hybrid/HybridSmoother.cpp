@@ -25,8 +25,18 @@
 namespace gtsam {
 
 /* ************************************************************************* */
+void HybridSmoother::reInitialize(HybridBayesNet &&hybridBayesNet) {
+  hybridBayesNet_ = std::move(hybridBayesNet);
+}
+
+/* ************************************************************************* */
+void HybridSmoother::reInitialize(HybridBayesNet &hybridBayesNet) {
+  this->reInitialize(std::move(hybridBayesNet));
+}
+
+/* ************************************************************************* */
 Ordering HybridSmoother::getOrdering(const HybridGaussianFactorGraph &factors,
-                                     const KeySet &continuousKeys) {
+                                     const KeySet &lastKeysToEliminate) {
   // Get all the discrete keys from the factors
   KeySet allDiscrete = factors.discreteKeySet();
 
@@ -34,7 +44,7 @@ Ordering HybridSmoother::getOrdering(const HybridGaussianFactorGraph &factors,
   KeyVector lastKeys;
 
   // Insert continuous keys first.
-  for (auto &k : continuousKeys) {
+  for (auto &k : lastKeysToEliminate) {
     if (!allDiscrete.exists(k)) {
       lastKeys.push_back(k);
     }
@@ -44,11 +54,10 @@ Ordering HybridSmoother::getOrdering(const HybridGaussianFactorGraph &factors,
   std::copy(allDiscrete.begin(), allDiscrete.end(),
             std::back_inserter(lastKeys));
 
-  const VariableIndex index(factors);
-
   // Get an ordering where the new keys are eliminated last
   Ordering ordering = Ordering::ColamdConstrainedLast(
-      index, KeyVector(lastKeys.begin(), lastKeys.end()), true);
+      factors, KeyVector(lastKeys.begin(), lastKeys.end()), true);
+
   return ordering;
 }
 
@@ -79,7 +88,11 @@ void HybridSmoother::update(const HybridGaussianFactorGraph &newFactors,
   // If no ordering provided, then we compute one
   if (!given_ordering.has_value()) {
     // Get the keys from the new factors
-    const KeySet continuousKeysToInclude;// = newFactors.keys();
+    KeySet continuousKeysToInclude;  // Scheme 1: empty, 15sec/2000, 64sec/3000
+                                     // (69s without TF)
+    // continuousKeysToInclude = newFactors.keys();  // Scheme 2: all,
+    // 8sec/2000, 160sec/3000 continuousKeysToInclude = updatedGraph.keys();  //
+    // Scheme 3: all, stopped after 80sec/2000
 
     // Since updatedGraph now has all the connected conditionals,
     // we can get the correct ordering.
@@ -88,8 +101,14 @@ void HybridSmoother::update(const HybridGaussianFactorGraph &newFactors,
     ordering = *given_ordering;
   }
 
+#if GTSAM_HYBRID_TIMING
+  gttic_(HybridSmootherEliminate);
+#endif
   // Eliminate.
   HybridBayesNet bayesNetFragment = *updatedGraph.eliminateSequential(ordering);
+#if GTSAM_HYBRID_TIMING
+  gttoc_(HybridSmootherEliminate);
+#endif
 
 #ifdef DEBUG_SMOOTHER_DETAIL
   for (auto conditional : bayesNetFragment) {
@@ -109,12 +128,18 @@ void HybridSmoother::update(const HybridGaussianFactorGraph &newFactors,
 
   /// Prune
   if (maxNrLeaves) {
+#if GTSAM_HYBRID_TIMING
+    gttic_(HybridSmootherPrune);
+#endif
     // `pruneBayesNet` sets the leaves with 0 in discreteFactor to nullptr in
     // all the conditionals with the same keys in bayesNetFragment.
     DiscreteValues newlyFixedValues;
     bayesNetFragment = bayesNetFragment.prune(*maxNrLeaves, marginalThreshold_,
                                               &newlyFixedValues);
     fixedValues_.insert(newlyFixedValues);
+#if GTSAM_HYBRID_TIMING
+    gttoc_(HybridSmootherPrune);
+#endif
   }
 
 #ifdef DEBUG_SMOOTHER
@@ -157,7 +182,7 @@ HybridSmoother::addConditionals(const HybridGaussianFactorGraph &newFactors,
     // in the previous `hybridBayesNet` to the graph
 
     // New conditionals to add to the graph
-    gtsam::HybridBayesNet newConditionals;
+    HybridBayesNet newConditionals;
 
     // NOTE(Varun) Using a for-range loop doesn't work since some of the
     // conditionals are invalid pointers

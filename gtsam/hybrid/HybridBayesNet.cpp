@@ -65,14 +65,17 @@ HybridBayesNet HybridBayesNet::prune(
   }
 
   HybridBayesNet result;
+  result.reserve(size());
 
   // Go through all the Gaussian conditionals, restrict them according to
   // fixed values, and then prune further.
-  for (std::shared_ptr<gtsam::HybridConditional> conditional : *this) {
+  for (std::shared_ptr<HybridConditional> conditional : *this) {
     if (conditional->isDiscrete()) continue;
 
     // No-op if not a HybridGaussianConditional.
-    if (marginalThreshold) conditional = conditional->restrict(fixed);
+    if (marginalThreshold)
+      conditional = std::static_pointer_cast<HybridConditional>(
+          conditional->restrict(fixed));
 
     // Now decide on type what to do:
     if (auto hgc = conditional->asHybrid()) {
@@ -84,13 +87,17 @@ HybridBayesNet HybridBayesNet::prune(
       }
       // Type-erase and add to the pruned Bayes Net fragment.
       result.push_back(prunedHybridGaussianConditional);
-    } else if (auto gc = conditional->asGaussian()) {
-      // Add the non-HybridGaussianConditional conditional
-      result.push_back(gc);
+    } else if (conditional->isContinuous()) {
+      // Add the non-Hybrid GaussianConditional conditional
+      result.push_back(conditional);
     } else
       throw std::runtime_error(
           "HybrdiBayesNet::prune: Unknown HybridConditional type.");
   }
+
+#if GTSAM_HYBRID_TIMING
+  gttoc_(HybridPruning);
+#endif
 
   // Add the pruned discrete conditionals to the result.
   for (const DiscreteConditional::shared_ptr &discrete : prunedBN)
