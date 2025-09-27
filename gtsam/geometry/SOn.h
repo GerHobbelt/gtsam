@@ -48,7 +48,7 @@ constexpr int NSquaredSO(int N) { return (N < 0) ? Eigen::Dynamic : N * N; }
 
 /**
  * Manifold of special orthogonal rotation matrices SO<N>.
- * Template paramater N can be a fixed integer or can be Eigen::Dynamic
+ * Template parameter N can be a fixed integer or can be Eigen::Dynamic
  */
 template <int N>
 class SO : public MatrixLieGroup<SO<N>, internal::DimensionSO(N), N> {
