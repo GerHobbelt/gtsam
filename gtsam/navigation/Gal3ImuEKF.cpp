@@ -44,12 +44,13 @@ Gal3 Gal3ImuEKF::Dynamics(const Vector3& g_n, const Gal3& X,
   // Calculate W, phi, and U
   const Gal3 W = (mode == NO_TIME) ? TimeZeroingGravity(g_n, dt)
                                    : CompensatedGravity(g_n, dt, X.time());
-  const Gal3 U = IMU(omega_b, f_b, dt);
+  const Gal3 U = Imu(omega_b, f_b, dt);
 
   const Gal3 X_next = Base::Dynamics(W, X, U, A);
   if (A && mode == TRACK_TIME_WITH_COVARIANCE) {
     // Extra column from state-dependent left factor W(t_k):
     // right-trivialized increment at W due to δt is e_t := [0; 0; -g dt; 0] in
+    // the navigation frame
     Vector e_t(10);
     e_t.setZero();
     e_t.segment<3>(6) = -g_n * dt;  // p-block (indices 6..8)

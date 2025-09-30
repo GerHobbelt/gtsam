@@ -545,7 +545,6 @@ virtual class Scenario {
   gtsam::NavState navState(double t) const;
   gtsam::Vector velocity_b(double t) const;
   gtsam::Vector acceleration_b(double t) const;
-  gtsam::Gal3 gal3(double t) const;
 };
 
 virtual class ConstantTwistScenario : gtsam::Scenario {
@@ -657,7 +656,7 @@ class NavStateImuEKF : gtsam::LeftLinearEKF<gtsam::NavState> {
 
   // Static methods
   static gtsam::NavState Gravity(const gtsam::Vector& n_gravity, double dt);
-  static gtsam::NavState IMU(const gtsam::Vector& omega_b, const gtsam::Vector& f_b, double dt);
+  static gtsam::NavState Imu(const gtsam::Vector& omega_b, const gtsam::Vector& f_b, double dt);
   static gtsam::NavState Dynamics(const gtsam::Vector& n_gravity, const gtsam::NavState& X,
                                    const gtsam::Vector& omega_b, const gtsam::Vector& f_b,
                                    double dt);
@@ -685,7 +684,7 @@ class Gal3ImuEKF : gtsam::LeftLinearEKF<gtsam::Gal3> {
   static gtsam::Gal3 Gravity(const gtsam::Vector& g_n, double dt);
   static gtsam::Gal3 TimeZeroingGravity(const gtsam::Vector& g_n, double dt);
   static gtsam::Gal3 CompensatedGravity(const gtsam::Vector& g_n, double dt, double t_k);
-  static gtsam::Gal3 IMU(const gtsam::Vector& omega_b, const gtsam::Vector& f_b, double dt);
+  static gtsam::Gal3 Imu(const gtsam::Vector& omega_b, const gtsam::Vector& f_b, double dt);
   static gtsam::Gal3 Dynamics(const gtsam::Vector& n_gravity,
                               const gtsam::Gal3& X,
                               const gtsam::Vector& omega_b,
@@ -699,8 +698,4 @@ class Gal3ImuEKF : gtsam::LeftLinearEKF<gtsam::Gal3> {
   // Predict using IMU measurements
   void predict(const gtsam::Vector& omega_b, const gtsam::Vector& f_b, double dt);
 };
-
 }
-
-
-

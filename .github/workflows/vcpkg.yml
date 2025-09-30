@@ -25,9 +25,6 @@ jobs:
             test_target: RUN_TESTS
             binary_cache: C:\Users\runneradmin\AppData\Local\vcpkg\archives
             python: python
-            # check_constrained_program fail on windows. should fix it for windows.
-            # Remove this excluded test when you fix it for windows.
-            ctest_extra_flags: -E "check_constrained_program|check_inference_program|check_symbolic_program|check_discrete_program"
             # Exclude test_sumProduct and test_sumProduct_chain from pytest on windows.
             # These tests should be fixed for windows.
             pytest_extra_flags: -k "not test_sumProduct"
@@ -76,7 +73,13 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          brew install autoconf automake autoconf-archive
+          brew install autoconf autoconf-archive automake libtool
+
+      - name: Set vcpkg installtion root env
+        shell: bash
+        run: |
+          VCPKG_BASH_PATH=${VCPKG_INSTALLATION_ROOT//\\//}
+          echo "VCPKG_INSTALLATION_ROOT=$VCPKG_BASH_PATH" >> "$GITHUB_ENV"
 
       - name: "Install dependencies"
         run: >
@@ -99,13 +102,20 @@ jobs:
           tbb
           pybind11
 
+      - name: On Failure, upload vcpkg logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs_${{ matrix.os }}_${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ env.VCPKG_INSTALLATION_ROOT }}/buildtrees/**/*.log
+
       - name: copy files for hash
         shell: bash
         run: |
-          VCPKG_BASH_PATH=${VCPKG_INSTALLATION_ROOT//\\//}
-          echo $VCPKG_BASH_PATH
+          echo $VCPKG_INSTALLATION_ROOT
           mkdir -p vcpkg-info
-          find $VCPKG_BASH_PATH/installed/ -type f -name 'vcpkg_abi_info.txt' | \
+          find $VCPKG_INSTALLATION_ROOT/installed/ -type f -name 'vcpkg_abi_info.txt' | \
           while read filepath; do
             triplet=$(echo "$filepath" | awk -F/ '{print $(NF-3)}')
             port=$(echo "$filepath" | awk -F/ '{print $(NF-1)}')
