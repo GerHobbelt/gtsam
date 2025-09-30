@@ -10,47 +10,67 @@
  * -------------------------------------------------------------------------- */
 
 /**
- * @file  NavStateImuEKF.h
- * @brief Extended Kalman Filter for IMU-driven NavState on SE(3).
+ * @file  Gal3ImuEKF.h
+ * @brief Extended Kalman Filter for IMU-driven Gal3
+ * We use an Extended Kalman Filter on the Gal3 Lie group to propagate from one state to another.
+ * X_(k+1) = W*X*U
+ * where X(k) ∈ Gal3 follows format of
+ * [R, v, p;
+ * 0, 1, dt;
+ * 0, 0, 1]
  *
- * @date  August 2025
- * @authors Derek Benham, Frank Dellaert
+ * W is the gravity matrix that transforms body to world frame where
+ * W ∈ Gal3= [I_3, g * dt, -0.5*g*dt^2
+ * 0, 1, -dt
+ * 0, 0, 1]
+ *
+ * U ∈ Gal3 is the control matrix where
+ * U = [dR, f_b*dt, f_b*0.5*dt^2
+ * 0, 1, dt
+ * 0, 0, 1]
+ * @date  September 2025
+ * @authors Scott Baker
  */
 
 #pragma once
 
 #include <gtsam/navigation/LeftLinearEKF.h>  // Include the base class
-#include <gtsam/navigation/NavState.h>
+#include <gtsam/geometry/Gal3.h>
 #include <gtsam/navigation/PreintegrationParams.h>
 
 namespace gtsam {
 
-/// Specialized EKF for IMU-driven NavState on SE_2(3)
-class GTSAM_EXPORT NavStateImuEKF : public LeftLinearEKF<NavState> {
+/// Specialized EKF for IMU-driven on Gal3
+class GTSAM_EXPORT Gal3ImuEKF : public LeftLinearEKF<Gal3> {
  public:
-  using Base = LeftLinearEKF<NavState>;
-  using TangentVector = typename Base::TangentVector;  // Vector9
-  using Jacobian = typename Base::Jacobian;            // 9x9
-  using Covariance = typename Base::Covariance;        // 9x9
+  using Base = LeftLinearEKF<Gal3>;
+  using TangentVector = typename Base::TangentVector;  // Vector10
+  using Jacobian = typename Base::Jacobian;            // 10x10
+  using Covariance = typename Base::Covariance;        // 10x10
 
   /**
    * Construct with initial state/covariance and preintegration params (for
    * gravity and IMU covariances)
-   * @param X0 Initial NavState.
+   * @param X0 Initial Gal3.
    * @param P0 Initial covariance in tangent space at X0.
    * @param params Preintegration parameters providing gravity and options.
    */
-  NavStateImuEKF(const NavState& X0, const Covariance& P0,
+  Gal3ImuEKF(const Gal3& X0, const Covariance& P0,
                  const std::shared_ptr<PreintegrationParams>& params);
 
   /// Calculate W (gravity-only left composition, world-frame increments)
-  static NavState Gravity(const Vector3& n_gravity, double dt) {
-    return {Rot3(), n_gravity * (0.5 * dt * dt), n_gravity * dt};
+  /// Gal3:
+  /// [R, v, p
+  /// 0, 1, t -> W = [I, g*dt, 1/2 * g * dt^2
+  /// 0, 0, 1]        0, 1, dt
+  ///                 0, 0, 1]
+  static Gal3 Gravity(const Vector3& n_gravity, double dt) {
+    return {Rot3(), -0.5*n_gravity*dt*dt, n_gravity*dt, -dt};
   }
 
   /// Calculate U from raw IMU (no gravity): body-frame increments
-  static NavState IMU(const Vector3& omega_b, const Vector3& f_b, double dt) {
-    return {Rot3::Expmap(omega_b * dt), f_b * (0.5 * dt * dt), f_b * dt};
+  static Gal3 IMU(const Vector3& omega_b, const Vector3& f_b, double dt) {
+    return {Rot3::Expmap(omega_b * dt), f_b * (0.5 * dt * dt), f_b * dt, dt};
   }
 
   /**
@@ -65,16 +85,16 @@ class GTSAM_EXPORT NavStateImuEKF : public LeftLinearEKF<NavState> {
    * IMU increment functions, respectively.
    *
    * @param n_gravity Gravity vector in the navigation frame.
-   * @param X Current NavState.
+   * @param X Current Gal3.
    * @param omega_b Body angular velocity measurement (rad/s).
    * @param f_b Body specific force measurement (m/s^2).
    * @param dt Time step in seconds.
    * @param A Optional Jacobian of the dynamics with respect to the state.
-   * @return The next NavState after applying the dynamics.
+   * @return The next Gal3 after applying the dynamics.
    */
-  static NavState Dynamics(const Vector3& n_gravity, const NavState& X,
+  static Gal3 Dynamics(const Vector3& n_gravity, const Gal3& X,
                            const Vector3& omega_b, const Vector3& f_b,
-                           double dt, OptionalJacobian<9, 9> A = {});
+                           double dt, OptionalJacobian<10, 10> A = {});
 
   /**
    * @brief Predict the next state using gyro and accelerometer measurements.
