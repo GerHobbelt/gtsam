@@ -11,13 +11,10 @@
 
 /**
  * @file  Gal3ImuEKF.h
- * @brief Extended Kalman Filter for IMU-driven Gal3
- * We use an Extended Kalman Filter on the Gal3 Lie group to propagate from one state to another.
- * X_(k+1) = W*X*U
- * where X(k) ∈ Gal3 follows format of
- * [R, v, p;
- * 0, 1, dt;
- * 0, 0, 1]
+ * @brief (Invariant) Extended Kalman Filter for IMU-driven Gal3
+ * We use an invariant Kalman Filter on the Gal3 Lie group to propagate from one
+ * state to another. X_(k+1) = W*X*U where X(k) ∈ Gal3 follows format of [R, v,
+ * p; 0, 1, dt; 0, 0, 1]
  *
  * W is the gravity matrix that transforms body to world frame where
  * W ∈ Gal3= [I_3, g * dt, -0.5*g*dt^2
@@ -34,19 +31,26 @@
 
 #pragma once
 
-#include <gtsam/navigation/LeftLinearEKF.h>  // Include the base class
 #include <gtsam/geometry/Gal3.h>
+#include <gtsam/navigation/InvariantEKF.h>  // Include the base class
 #include <gtsam/navigation/PreintegrationParams.h>
 
 namespace gtsam {
 
 /// Specialized EKF for IMU-driven on Gal3
-class GTSAM_EXPORT Gal3ImuEKF : public LeftLinearEKF<Gal3> {
+class GTSAM_EXPORT Gal3ImuEKF : public InvariantEKF<Gal3> {
  public:
-  using Base = LeftLinearEKF<Gal3>;
+  using Base = InvariantEKF<Gal3>;
   using TangentVector = typename Base::TangentVector;  // Vector10
   using Jacobian = typename Base::Jacobian;            // 10x10
   using Covariance = typename Base::Covariance;        // 10x10
+
+  /// The Gal3 EKF has three modes of operation
+  enum Mode {
+    NO_TIME,  ///< Do not track time, state remains in NavState sub-group
+    TRACK_TIME_NO_COVARIANCE,  ///< Track time, but not its covariance (default)
+    TRACK_TIME_WITH_COVARIANCE,  ///< Track time and its covariance.
+  };
 
   /**
    * Construct with initial state/covariance and preintegration params (for
@@ -56,21 +60,36 @@ class GTSAM_EXPORT Gal3ImuEKF : public LeftLinearEKF<Gal3> {
    * @param params Preintegration parameters providing gravity and options.
    */
   Gal3ImuEKF(const Gal3& X0, const Covariance& P0,
-                 const std::shared_ptr<PreintegrationParams>& params);
+             const std::shared_ptr<PreintegrationParams>& params,
+             Mode mode = TRACK_TIME_NO_COVARIANCE);
 
-  /// Calculate W (gravity-only left composition, world-frame increments)
-  /// Gal3:
-  /// [R, v, p
-  /// 0, 1, t -> W = [I, g*dt, 1/2 * g * dt^2
-  /// 0, 0, 1]        0, 1, dt
-  ///                 0, 0, 1]
-  static Gal3 Gravity(const Vector3& n_gravity, double dt) {
-    return {Rot3(), -0.5*n_gravity*dt*dt, n_gravity*dt, -dt};
+  /// Calculate gravity-only left composition, world-frame increments
+  /// p = +1/2 g dt^2, v = g dt, t = 0
+  static Gal3 Gravity(const Vector3& g_n, double dt) {
+    return {Rot3(), g_n * (0.5 * dt * dt), g_n * dt, 0.0};
+  }
+
+  /// Calculate W: gravity with correction to neutralize time change,
+  /// Using this W(t_k) together with IMU() yields the exact dynamics update,
+  /// but t stays 0, and hence we stay within NavState sub-group at all times.
+  static Gal3 TimeZeroingGravity(const Vector3& g_n, double dt) {
+    return {Rot3(), -g_n * (0.5 * dt * dt), g_n * dt, -dt};
+  }
+
+  /// Calculate W: position-compensated gravity (left composition) that enables
+  /// tracking absolute time in-state. Using this W(t_k) together with IMU()
+  /// yields the exact dynamics update with additionally t_{k+1} = t_k + dt.
+  static Gal3 CompensatedGravity(const Vector3& g_n, double dt, double t_k) {
+    const Point3 pW(-t_k * g_n * dt - g_n * (0.5 * dt * dt));
+    const Vector3 vW = g_n * dt;
+    return {Rot3(), pW, vW, 0.0};
   }
 
   /// Calculate U from raw IMU (no gravity): body-frame increments
   static Gal3 IMU(const Vector3& omega_b, const Vector3& f_b, double dt) {
-    return {Rot3::Expmap(omega_b * dt), f_b * (0.5 * dt * dt), f_b * dt, dt};
+    Gal3::TangentVector xi;
+    xi << omega_b, f_b, Z_3x1, 1.0;
+    return Gal3::Expmap(xi * dt);
   }
 
   /**
@@ -84,7 +103,7 @@ class GTSAM_EXPORT Gal3ImuEKF : public LeftLinearEKF<Gal3> {
    * where W, \phi, and U are the gravity, (autonomous) position update, and
    * IMU increment functions, respectively.
    *
-   * @param n_gravity Gravity vector in the navigation frame.
+   * @param g_n Gravity vector in the navigation frame.
    * @param X Current Gal3.
    * @param omega_b Body angular velocity measurement (rad/s).
    * @param f_b Body specific force measurement (m/s^2).
@@ -92,9 +111,10 @@ class GTSAM_EXPORT Gal3ImuEKF : public LeftLinearEKF<Gal3> {
    * @param A Optional Jacobian of the dynamics with respect to the state.
    * @return The next Gal3 after applying the dynamics.
    */
-  static Gal3 Dynamics(const Vector3& n_gravity, const Gal3& X,
-                           const Vector3& omega_b, const Vector3& f_b,
-                           double dt, OptionalJacobian<10, 10> A = {});
+  static Gal3 Dynamics(const Vector3& g_n, const Gal3& X,
+                       const Vector3& omega_b, const Vector3& f_b, double dt,
+                       Mode mode = TRACK_TIME_WITH_COVARIANCE,
+                       OptionalJacobian<10, 10> A = {});
 
   /**
    * @brief Predict the next state using gyro and accelerometer measurements.
@@ -116,6 +136,7 @@ class GTSAM_EXPORT Gal3ImuEKF : public LeftLinearEKF<Gal3> {
 
  private:
   std::shared_ptr<PreintegrationParams> params_;
+  Mode mode_{TRACK_TIME_NO_COVARIANCE};
   Covariance Q_ = Covariance::Zero();
 };
 

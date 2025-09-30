@@ -22,70 +22,59 @@
 #include <gtsam/navigation/Gal3ImuEKF.h>
 
 namespace gtsam {
-// Autonomous Flow
-struct AutonomousFlow {
-  double dt;
-  // We don't have I_10x10 defined anywhere like I_9x9 in NavState, so ->
-  using Jacobian = Eigen::Matrix<double, 10, 10>;
-
-  // Differential at identity
-  Jacobian dIdentity() const {
-    Jacobian Phi = Jacobian::Identity();
-    return Phi;
-  }
-
-  // Apply φ(x) by p += v·dt //
-  // TODO: Check if t = 0 or t = X.time. I don't think it matters, as long as we do not add a +dt
-  // dt shouldn't be added - because in gravity
-  Gal3 operator()(const Gal3& X) const {
-    return {X};
-  }
-};
-
 
 Gal3ImuEKF::Gal3ImuEKF(const Gal3& X0, const Covariance& P0,
-                               const std::shared_ptr<PreintegrationParams>& p)
-    : Base(X0, P0), params_(p) {
-  // Build process noise Q_ = block_diag(Cg, Ci, Ca, 0)
-  // TODO: Check rows here since p, v switched
+                       const std::shared_ptr<PreintegrationParams>& p,
+                       Mode mode)
+    : Base(X0, P0), params_(p), mode_(mode) {
+  // Build process noise Q_ = block_diag(Cg, Ca, Ci, 0)
   Q_.setZero();
   Q_.template block<3, 3>(0, 0) = p->gyroscopeCovariance;
-  Q_.template block<3, 3>(3, 3) = p->accelerometerCovariance; // switched for v, p ?
+  Q_.template block<3, 3>(3, 3) = p->accelerometerCovariance;
   Q_.template block<3, 3>(6, 6) = p->integrationCovariance;
 }
 
-Gal3 Gal3ImuEKF::Dynamics(const Vector3& n_gravity, const Gal3& X,
-                                  const Vector3& omega_b, const Vector3& f_b,
-                                  double dt, OptionalJacobian<10, 10> A) {
+Gal3 Gal3ImuEKF::Dynamics(const Vector3& g_n, const Gal3& X,
+                          const Vector3& omega_b, const Vector3& f_b, double dt,
+                          Mode mode, OptionalJacobian<10, 10> A) {
   if (dt <= 0.0) {
-    throw std::invalid_argument(
-        "Gal3ImuEKF::Dynamics: dt must be positive");
+    throw std::invalid_argument("Gal3ImuEKF::Dynamics: dt must be positive");
   }
 
   // Calculate W, phi, and U
-  const Gal3 W = Gravity(n_gravity, dt);
-  AutonomousFlow phi;  // Φ: velocity acts on position
+  const Gal3 W = (mode == NO_TIME) ? TimeZeroingGravity(g_n, dt)
+                                   : CompensatedGravity(g_n, dt, X.time());
   const Gal3 U = IMU(omega_b, f_b, dt);
 
-  return Base::Dynamics(W, phi, X, U, A);
+  const Gal3 X_next = Base::Dynamics(W, X, U, A);
+  if (A && mode == TRACK_TIME_WITH_COVARIANCE) {
+    // Extra column from state-dependent left factor W(t_k):
+    // right-trivialized increment at W due to δt is e_t := [0; 0; -g dt; 0] in
+    Vector e_t(10);
+    e_t.setZero();
+    e_t.segment<3>(6) = -g_n * dt;  // p-block (indices 6..8)
+
+    // Bring to the right-side through the adjoint of X_next and add on to A:
+    A->col(9) += X_next.inverse().Adjoint(e_t);
+  }
+  return X_next;
 }
 
 void Gal3ImuEKF::predict(const Vector3& omega_b, const Vector3& f_b,
-                             double dt) {
+                         double dt) {
   if (dt <= 0.0) {
     throw std::invalid_argument("Gal3ImuEKF::predict: dt must be positive");
   }
 
-  // Calculate W, phi, and U
-  const Gal3 W = Gravity(params_->n_gravity, dt);
-  AutonomousFlow phi;  // Φ: velocity acts on position
-  const Gal3 U = IMU(omega_b, f_b, dt);
+  // Calculate next state, with covariance
+  Gal3::Jacobian A;
+  X_ = Dynamics(params_->n_gravity, X_, omega_b, f_b, dt, mode_, A);
 
   // Scale continuous-time process noise to the discrete interval [t, t+dt]
   Covariance Qdt = Q_ * dt;
 
-  // EKF predict
-  Base::predict(W, phi, U, Qdt);
+  // Update covariance
+  P_ = A * P_ * A.transpose() + Qdt;
 }
 
 const std::shared_ptr<PreintegrationParams>& Gal3ImuEKF::params() const {
@@ -94,8 +83,6 @@ const std::shared_ptr<PreintegrationParams>& Gal3ImuEKF::params() const {
 
 const Vector3& Gal3ImuEKF::gravity() const { return params_->n_gravity; }
 
-const Gal3ImuEKF::Covariance& Gal3ImuEKF::processNoise() const {
-  return Q_;
-}
+const Gal3ImuEKF::Covariance& Gal3ImuEKF::processNoise() const { return Q_; }
 
 }  // namespace gtsam
