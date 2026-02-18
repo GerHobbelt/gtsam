@@ -11,7 +11,7 @@
 
 /**
  * @file MultifrontalSolver.h
- * @brief
+ * @brief Imperative-style multifrontal solver for Gaussian factor graphs.
  * @author Frank Dellaert
  * @date   December 2025
  */
@@ -26,10 +26,12 @@
 #include <iosfwd>
 #include <map>
 #include <memory>
+#include <unordered_set>
 #include <vector>
 
 namespace gtsam {
 
+class GaussianBayesTree;
 class MultifrontalClique;
 
 /**
@@ -41,21 +43,32 @@ class MultifrontalClique;
  */
 class GTSAM_EXPORT MultifrontalSolver {
  public:
+  /// Shared pointer to a MultifrontalClique.
   using CliquePtr = std::shared_ptr<MultifrontalClique>;
+  /// Node type for tree traversal utilities.
+  using Node = MultifrontalClique;
 
  private:
-  std::vector<CliquePtr> roots_;
-  std::vector<CliquePtr> cliques_;           // All cliques
-  std::vector<CliquePtr> postOrderCliques_;  // For elimination
-  std::map<Key, size_t> dims_;               // Variable dimensions
+  std::vector<CliquePtr> roots_;       ///< Roots of the elimination tree.
+  std::vector<CliquePtr> cliques_;     ///< All cliques in the solver.
+  std::map<Key, size_t> dims_;         ///< Map from variable key to dimension.
+  mutable VectorValues solution_;      ///< Cached solution vector.
+  std::unordered_set<Key> fixedKeys_;  ///< Keys fixed by constrained factors.
 
  public:
   /**
    * Construct the solver from a factor graph and an ordering.
    * This builds the symbolic junction tree and pre-allocates all matrices.
+   * @param graph The factor graph to solve.
+   * @param ordering The variable ordering to use for elimination.
+   * @param mergeDimCap Merge a child if its frontal dimension plus the
+   * parent's total dimension is below this threshold (0 disables merging).
+   * @param reportStream Optional stream to report clique structure stats
+   * (frontals, separators, total dims, and children).
    */
-  MultifrontalSolver(const GaussianFactorGraph& graph,
-                     const Ordering& ordering);
+  MultifrontalSolver(const GaussianFactorGraph& graph, const Ordering& ordering,
+                     size_t mergeDimCap = 0,
+                     std::ostream* reportStream = nullptr);
 
   /**
    * Load new numerical values from the factor graph.
@@ -69,21 +82,34 @@ class GTSAM_EXPORT MultifrontalSolver {
    * Eliminate the graph using Cholesky factorization.
    * This operates in-place on the pre-allocated matrices.
    */
-  void eliminate();
+  void eliminateInPlace();
+
+  /**
+   * Compute a Bayes tree from the in-place Cholesky factorization.
+   * Requires eliminateInPlace() to have been called beforehand.
+   * @return A GaussianBayesTree representing the eliminated factor graph
+   * encoded by the current multifrontal factorization.
+   */
+  GaussianBayesTree computeBayesTree() const;
 
   /**
    * Solve for the update vector.
    *
-   * @return The solution vector delta.
+   * @return Reference to the internally cached solution vector.
    */
-  VectorValues solve() const;
+  const VectorValues& updateSolution() const;
 
-  // Accessors for testing
+  /// Accessor for the roots of the elimination tree.
   const std::vector<CliquePtr>& roots() const { return roots_; }
 
+  /// Get the total number of cliques in the solver.
+  size_t cliqueCount() const { return cliques_.size(); }
+
+  /// Print the solver state.
   void print(const std::string& s = "",
              const KeyFormatter& keyFormatter = DefaultKeyFormatter) const;
 
+  /// Output stream operator for MultifrontalSolver.
   friend std::ostream& operator<<(std::ostream& os,
                                   const MultifrontalSolver& solver);
 };
