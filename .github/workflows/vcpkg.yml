@@ -25,9 +25,6 @@ jobs:
             test_target: RUN_TESTS
             binary_cache: C:\Users\runneradmin\AppData\Local\vcpkg\archives
             python: python
-            # Exclude test_sumProduct and test_sumProduct_chain from pytest on windows.
-            # These tests should be fixed for windows.
-            pytest_extra_flags: -k "not test_sumProduct"
           - os: ubuntu-latest
             triplet: x64-linux-release
             build_type: Release
@@ -45,6 +42,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Restore cache dependencies
+        id: cache-restore
         uses: actions/cache/restore@v3
         with:
           path: ${{ matrix.binary_cache }}
@@ -57,6 +55,18 @@ jobs:
         with:
           arch: x64
           toolset: 14.40
+
+      - name: Install sccache
+        if: runner.os == 'Windows'
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Use sccache
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=ON" >> "$GITHUB_ENV"
+          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
 
       - name: cl version
         if: runner.os == 'Windows'
@@ -98,9 +108,9 @@ jobs:
           boost-system
           boost-thread
           boost-timer
-          eigen3
           tbb
           pybind11
+          geographiclib
 
       - name: On Failure, upload vcpkg logs
         if: failure()
@@ -123,6 +133,8 @@ jobs:
           done
 
       - name: Save cache dependencies
+        # Don't save if it's the exact same
+        if: steps.cache-restore.outputs.cache-matched-key != format('{0}-{1}', matrix.os, hashFiles('vcpkg-info/*'))
         uses: actions/cache/save@v4
         with:
           path: ${{ matrix.binary_cache }}
@@ -147,15 +159,17 @@ jobs:
               -DVCPKG_HOST_TRIPLET=${{ matrix.triplet }} \
               -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
               -DGTSAM_BUILD_EXAMPLES_ALWAYS=ON \
+              -DGTSAM_BUILD_WITH_PRECOMPILED_HEADERS=OFF \
               -DGTSAM_ROT3_EXPMAP=ON \
               -DGTSAM_POSE3_EXPMAP=ON \
               -DGTSAM_BUILD_PYTHON=ON \
               -DGTSAM_BUILD_TESTS=ON \
               -DGTSAM_BUILD_UNSTABLE=ON \
               -DGTSAM_ALLOW_DEPRECATED_SINCE_V43=OFF \
-              -DGTSAM_USE_SYSTEM_EIGEN=ON \
+              -DGTSAM_USE_SYSTEM_EIGEN=OFF \
               -DGTSAM_USE_SYSTEM_METIS=OFF \
               -DGTSAM_USE_SYSTEM_PYBIND=ON \
+              -DGTSAM_ENABLE_GEOGRAPHICLIB=ON \
               -DGTSAM_SUPPORT_NESTED_DISSECTION=ON \
               -DCTEST_EXTRA_ARGS='${{ matrix.ctest_extra_flags }}' \
               -DPYTEST_EXTRA_ARGS='${{ matrix.pytest_extra_flags }}'
