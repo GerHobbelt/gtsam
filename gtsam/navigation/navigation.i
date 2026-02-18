@@ -485,6 +485,27 @@ virtual class GPSFactor2ArmCalib : gtsam::NonlinearFactor{
   void serialize() const;
 };
 
+#include <gtsam/navigation/PseudorangeFactor.h>
+virtual class PseudorangeFactor : gtsam::NonlinearFactor {
+  PseudorangeFactor(gtsam::Key receiverPositionKey,
+                    gtsam::Key receiverClockBiasKey, double measuredPseudorange,
+                    const gtsam::Point3& satellitePosition,
+                    double satelliteClockBias,
+                    const gtsam::noiseModel::Base* model);
+
+  // Testable
+  void print(string s = "", const gtsam::KeyFormatter& keyFormatter =
+                                gtsam::DefaultKeyFormatter) const;
+  bool equals(const gtsam::NonlinearFactor& expected, double tol);
+
+  // Standard Interface
+  gtsam::Vector evaluateError(const gtsam::Point3& receiverPosition,
+                              const double& receiverClock_bias) const;
+
+  // enable serialization functionality
+  void serialize() const;
+};
+
 #include <gtsam/navigation/BarometricFactor.h>
 virtual class BarometricFactor : gtsam::NonlinearFactor {
   BarometricFactor();
@@ -551,6 +572,7 @@ virtual class Scenario {
   gtsam::Vector acceleration_n(double t) const;
   gtsam::Rot3 rotation(double t) const;
   gtsam::NavState navState(double t) const;
+  gtsam::Gal3 gal3(double t) const;
   gtsam::Vector velocity_b(double t) const;
   gtsam::Vector acceleration_b(double t) const;
 };
@@ -619,7 +641,7 @@ virtual class ManifoldEKF {
 
   // Only vector-based measurements are supported in wrapper
   void updateWithVector(const gtsam::Vector& prediction, const gtsam::Matrix& H,
-                        const gtsam::Vector& z, const gtsam::Matrix& R);
+                        const gtsam::Vector& z, const gtsam::Matrix& R, bool performReset = true);
 };
 
 #include <gtsam/navigation/LieGroupEKF.h>
@@ -652,47 +674,23 @@ virtual class InvariantEKF : gtsam::LeftLinearEKF<G> {
 };
 
 // ---------------------------------------------------------------------------
-// Equivariant Filter (attitude example wrapper)
-#include <gtsam/navigation/EquivariantFilter.h>
-#include <gtsam_unstable/geometry/ABC.h>
-template <M = {gtsam::Unit3}, Symmetry = {gtsam::abc::attitude_example::Symmetry}>
-virtual class EquivariantFilter : gtsam::ManifoldEKF<M> {
+// ABC Equivariant Filter
+#include <gtsam_unstable/geometry/ABCEquivariantFilter.h>
+namespace abc {
+template <N = {1, 2, 3}>
+class AbcEquivariantFilter {
   // Constructors
-  EquivariantFilter(const M& xi_ref, gtsam::Matrix Sigma);
-  EquivariantFilter(const M& xi_ref, gtsam::Matrix Sigma,
-                    const Symmetry::Group& X0);
+  AbcEquivariantFilter();
+  AbcEquivariantFilter(gtsam::Matrix Sigma0);
+
+  // Predict and update methods
+  void predict(const gtsam::Vector3& omega, const gtsam::Matrix6& inputCovariance, double dt);
+  void update(const gtsam::Unit3& y, const gtsam::Unit3& d, const gtsam::Matrix3& R, int cal_idx);
 
   // Accessors
-  gtsam::Matrix errorCovariance() const;
-  gtsam::Matrix covariance() const;
-  Symmetry::Group groupEstimate() const;
-
-  // Wrapper-friendly predict
-  void predictWithJacobianEuler(const gtsam::Vector& Lambda, gtsam::Matrix A,
-                                gtsam::Matrix Qc, double dt);
-
-  // Only vector-based measurements are supported in wrapper
-  void updateWithVector(const gtsam::Vector& prediction, const gtsam::Matrix& H,
-                        const gtsam::Vector& z, const gtsam::Matrix& R);
-};
-
-// ---------------------------------------------------------------------------
-// ABC Equivariant Filter wrapper (N=1)
-#include <gtsam_unstable/geometry/ABCEqFWrapper.h>
-namespace abc {
-class AbcEquivariantFilter1 {
-  AbcEquivariantFilter1();
-  AbcEquivariantFilter1(const gtsam::Matrix& Sigma0);
-
-  void predict(const gtsam::Vector& omega, const gtsam::Matrix& inputCovariance,
-               double dt);
-  void update(const gtsam::Unit3& y, const gtsam::Unit3& d,
-              const gtsam::Matrix& R, int cal_idx);
-
   gtsam::Rot3 attitude() const;
-  gtsam::Vector bias() const;
+  gtsam::Vector3 bias() const;
   gtsam::Rot3 calibration(size_t i) const;
-  gtsam::Matrix errorCovariance() const;
 };
 }  // namespace abc
 
