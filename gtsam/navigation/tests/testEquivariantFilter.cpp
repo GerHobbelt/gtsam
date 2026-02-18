@@ -119,27 +119,18 @@ inline Matrix23 inputMatrixB(const G& /*Q_hat*/) {
   return Matrix23::Identity();
 }
 
-struct Innovation {
-  Innovation(const Vector3& z_measured, double c_m)
-      : z_measured_(z_measured), c_m_(c_m) {}
+struct MeasurementFunctor {
+  double c_m_;
+  explicit MeasurementFunctor(double c_m) : c_m_(c_m) {}
 
-  /// Innovation: ẑ - z_measured, with ẑ = c_m * η̂.
+  /// Measurement function h(η̂) = c_m * η̂.
   Vector3 operator()(const Unit3& eta_hat,
                      OptionalJacobian<3, 2> H = {}) const {
-    // Predicted measurement.
-    const Vector3 z_hat = c_m_ * eta_hat.point3();
-    const Vector3 nu = z_hat - z_measured_;
-
     if (H) {
-      // dy/dη in tangent coordinates: 3x2 mapping tangent -> R^3.
       *H = c_m_ * eta_hat.basis();
     }
-    return nu;
+    return c_m_ * eta_hat.point3(H);
   }
-
- private:
-  Vector3 z_measured_;  // measured output
-  double c_m_;          // measurement scale
 };
 
 //---------------------------------------------------------------------------
@@ -352,11 +343,35 @@ TEST(EquivariantFilter_Attitude, Predict) {
   // Qc is already on manifold, continuous-time.
   Matrix2 Q_process = Qc * dt;
   Matrix2 P_expected = Phi * Sigma0 * Phi.transpose() + Q_process;
-  EXPECT(assert_equal(P_expected, filter.covariance()));
+  EXPECT(assert_equal(P_expected, filter.errorCovariance()));
 
   // state() should be the rotated reference direction on S^2
   const Unit3 state_expected(X_expected.unrotate(eta_ref.point3()));
   EXPECT(assert_equal(state_expected, filter.state()));
+}
+
+//==============================================================================
+TEST(EquivariantFilter_Attitude, CovarianceRotation) {
+  using namespace attitude_example;
+
+  Matrix2 Sigma0 = 0.01 * I_2x2;
+  EquivariantFilter<M, Symmetry> filter(eta_ref, Sigma0);
+
+  // Move away from identity so the covariance needs to be rotated.
+  const double dt = 0.02;
+  Matrix3 Sigma_u = 0.1 * I_3x3;
+  Matrix3 Q = processNoise(Sigma_u);
+  Matrix23 B = inputMatrixB(Q0);
+  Matrix2 Qc = B * Q * B.transpose();
+  filter.predict(lift_omega, psi_u, Qc, dt);
+
+  Matrix2 P_error = filter.errorCovariance();
+  Matrix2 J;
+  const typename Symmetry::Diffeomorphism action_at_g(filter.groupEstimate());
+  action_at_g(eta_ref, &J);
+  Matrix2 P_expected = J.transpose() * P_error * J;
+
+  EXPECT(assert_equal(P_expected, filter.covariance(), 1e-9));
 }
 
 //==============================================================================
@@ -376,18 +391,18 @@ TEST(EquivariantFilter_Attitude, Update) {
   filter.predict(lift_omega, psi_u, Qc, dt);
 
   const G Q_before = filter.groupEstimate();
-  const Matrix2 P_before = filter.covariance();
+  const Matrix2 P_before = filter.errorCovariance();
 
   // 3. Setup Measurement
-  const Vector3 y = c_m * eta_ref.point3();
+  const Vector3 z = c_m * eta_ref.point3();
   const Matrix3 R_meas = 0.01 * I_3x3;
-  Innovation innovation(y, c_m);
+  MeasurementFunctor h(c_m);
 
   // 4. Run Filter Update
-  filter.update(innovation, R_meas);
+  filter.update(h, z, R_meas);
 
   const G Q_after = filter.groupEstimate();
-  const Matrix2 P_after = filter.covariance();
+  const Matrix2 P_after = filter.errorCovariance();
 
   // 5. Run Manual Update (Mirroring EquivariantFilter implementation)
 
@@ -397,26 +412,27 @@ TEST(EquivariantFilter_Attitude, Update) {
   Matrix32 InnovationLift =
       Dphi0.completeOrthogonalDecomposition().pseudoInverse();
 
-  // Re-calculate Measurement Matrix C using helper method
+  // Re-calculate Measurement Matrix H
   const M eta_hat = phi_ref(Q_before);
-  Matrix C = filter.computeMeasurementMatrix(innovation, eta_hat);
+  Matrix H;
+  const Vector3 z_hat = h(eta_hat, H);
 
   // Calculate Gain K
-  Matrix S = C * P_before * C.transpose() + R_meas;
-  Matrix K = P_before * C.transpose() * S.inverse();
+  Matrix S = H * P_before * H.transpose() + R_meas;
+  Matrix K = P_before * H.transpose() * S.inverse();
 
   // Calculate Innovation
-  Vector3 innovation_vec = innovation(eta_hat);
+  const Vector3 innovation = z_hat - z;
 
   // Calculate Correction
-  Vector2 delta_xi = K * innovation_vec;
+  Vector2 delta_xi = -K * innovation;
   Vector3 delta_x = InnovationLift * delta_xi;
 
   // Update State: X_new = Exp(delta_x) * X_old (Left Update)
   const G X_expected = Rot3::Expmap(delta_x) * Q_before;
 
   // Update Covariance: Joseph Form
-  Matrix2 I_KC = Matrix2::Identity() - K * C;
+  Matrix2 I_KC = Matrix2::Identity() - K * H;
   Matrix2 P_expected =
       I_KC * P_before * I_KC.transpose() + K * R_meas * K.transpose();
 
@@ -447,12 +463,10 @@ TEST(EquivariantFilter_Attitude, CheckMatrices) {
   EXPECT(assert_equal(A_provided, A_computed));
 
   // Check C matrix
-  const Vector3 d(0, 0, 1);  // reference direction (z-axis)
-  const Vector3 y =
-      normalize(Point3(0, 1, 10));  // measured almost aligned with d
-  // Use the helper method for the check
-  Innovation innovation(y, c_m);
-  Matrix C_computed = filter.computeMeasurementMatrix(innovation, phi_ref(Q0));
+  const M eta_hat = phi_ref(Q0);
+  Matrix C_computed;
+  MeasurementFunctor h(c_m);
+  h(eta_hat, C_computed);
   EXPECT(C_computed.rows() == 3 && C_computed.cols() == 2);
 }
 

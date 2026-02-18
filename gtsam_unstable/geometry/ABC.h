@@ -12,6 +12,19 @@
  * (23)–(24) in Fornasier et al. (2022) for the continuous-time dynamics, lift
  * Λ(ξ,u), output action, and EqF update.
  *
+ * This header is intentionally small so it can serve as a reference
+ * implementation for users who want to plug their own manifold into
+ * EquivariantFilter. Everything below is exercised by
+ * gtsam_unstable/geometry/tests/testABC.cpp and the
+ * examples/AbcEquivariantFilterExample.cpp demo:
+ *   1) a State manifold with retract/localCoordinates,
+ *   2) the symmetry Group and its action on the state,
+ *   3) lift/input/output actions needed by EquivariantFilter,
+ *   4) a handful of helpers for linearization (A/B/C matrices and process
+ *      noise embedding).
+ * If you copy this file as a template, avoid adding extra behaviour the tests
+ * do not cover, so the example remains trustworthy.
+ *
  * @author Darshan Rajasekaran
  * @author Jennifer Oum
  * @author Rohan Bansal
@@ -20,16 +33,6 @@
  */
 
 #pragma once
-
-/**
- * @file ABC.h
- * @brief Core components for Attitude-Bias-Calibration systems
- *
- * This file contains fundamental components and utilities for the ABC system
- * based on the paper "Overcoming Bias: Equivariant Filter Design for Biased
- * Attitude Estimation with Online Calibration" by Fornasier et al.
- * Authors: Darshan Rajasekaran & Jennifer Oum
- */
 
 #include <gtsam/base/GroupAction.h>
 #include <gtsam/base/Matrix.h>
@@ -52,7 +55,7 @@
 namespace gtsam {
 namespace abc {
 
-/// Convert angular velocity vector to mathematical input (ω, 0)
+/// Convert a measured angular velocity ω into the mathematical input (ω, 0).
 inline Vector6 toInputVector(const Vector3& w) {
   return (Vector6() << w, Z_3x1).finished();
 }
@@ -65,7 +68,10 @@ using Calibrations = PowerLieGroup<Rot3, N>;
 // State Manifold
 //========================================================================
 
-/// State class representing the state of the Biased Attitude System
+/**
+ * Minimal state manifold for the biased attitude system: ξ = (R, b, S).
+ * Template parameter N is the number of calibrated sensors.
+ */
 template <size_t N>
 struct State {
   Rot3 R;             // Attitude rotation matrix R
@@ -139,102 +145,17 @@ struct State {
 //========================================================================
 
 /**
- * Symmetry group defined as the product Pose3 x Calibrations<n>
- * The Pose3 component models the (SO(3) ⋉ R^3) part acting on attitude/bias,
- * while Calibrations<n> captures the N sensor calibration rotations.
+ * Symmetry group G = Pose3 × Calibrations<n>. Pose3 handles the SE(3)-like
+ * part acting on (R, b) and Calibrations<n> handles the N extrinsic rotations.
  */
 template <size_t n>
-struct Group : public ProductLieGroup<Pose3, Calibrations<n>> {
-  using Base = ProductLieGroup<Pose3, Calibrations<n>>;
-  using typename Base::ChartJacobian;
-  using typename Base::Jacobian;
-  using typename Base::TangentVector;
+using Group = ProductLieGroup<Pose3, Calibrations<n>>;
 
-  static constexpr int dimension = Base::dimension;
-  static constexpr size_t numSensors = n;
-
-  Group() : Base() {}
-  Group(const Pose3& pose, const Calibrations<n>& calibrations)
-      : Base(pose, calibrations) {}
-  Group(const Base& base) : Base(base) {}
-  Group(const Rot3& A, const Matrix3& a, const Calibrations<n>& B)
-      : Group(Pose3(A, Point3(Rot3::Vee(a))), B) {}
-
-  static Group Identity() { return Group(); }
-
-  Group operator*(const Group& other) const {
-    return Group(Base::operator*(other));
-  }
-
-  Group compose(const Group& other, ChartJacobian H1 = ChartJacobian(),
-                ChartJacobian H2 = ChartJacobian()) const {
-    return Group(Base::compose(other, H1, H2));
-  }
-
-  Group between(const Group& other, ChartJacobian H1 = ChartJacobian(),
-                ChartJacobian H2 = ChartJacobian()) const {
-    return Group(Base::between(other, H1, H2));
-  }
-
-  Group inverse(ChartJacobian D = ChartJacobian()) const {
-    return Group(Base::inverse(D));
-  }
-
-  Group retract(const TangentVector& v, ChartJacobian H1 = ChartJacobian(),
-                ChartJacobian H2 = ChartJacobian()) const {
-    return Group(Base::retract(v, H1, H2));
-  }
-
-  Group expmap(const TangentVector& v) const { return Group(Base::expmap(v)); }
-
-  TangentVector logmap(const Group& g) const { return Base::logmap(g); }
-
-  static Group Expmap(const TangentVector& v,
-                      ChartJacobian Hv = ChartJacobian()) {
-    return Group(Base::Expmap(v, Hv));
-  }
-
-  static TangentVector Logmap(const Group& g,
-                              ChartJacobian Hg = ChartJacobian()) {
-    return Base::Logmap(g, Hg);
-  }
-
-  /**
-   * Matrix representation of the Lie-algebra adjoint operator ad_xi on g.
-   * For this direct product group it is block-diagonal with Pose3 and Rot3
-   * blocks.
-   */
-  static Jacobian adjointMap(const TangentVector& xi) {
-    Jacobian result = Jacobian::Zero();
-    result.template block<6, 6>(0, 0) =
-        Pose3::adjointMap(xi.template head<6>());
-    for (size_t i = 0; i < n; ++i) {
-      result.template block<3, 3>(6 + 3 * i, 6 + 3 * i) =
-          Rot3::adjointMap(xi.template segment<3>(6 + 3 * i));
-    }
-    return result;
-  }
-
-  const Pose3& pose() const { return this->first; }
-  Rot3 A() const { return this->first.rotation(); }
-  Vector3 a() const { return this->first.translation(); }
-  const Calibrations<n>& calibrations() const { return this->second; }
-
-  void print(const std::string& s = "") const {
-    if (!s.empty()) std::cout << s << " ";
-    std::cout << "Group<" << n << ">" << std::endl;
-    pose().print("  Pose");
-    for (size_t i = 0; i < n; ++i) {
-      const std::string label = "  S[" + std::to_string(i) + "]";
-      calibrations()[i].print(label);
-    }
-  }
-
-  bool equals(const Group& other, double tol = 1e-9) const {
-    if (!pose().equals(other.pose(), tol)) return false;
-    return traits<Calibrations<n>>::Equals(calibrations(), other.calibrations(),
-                                           tol);
-  }
+/// @brief Unpack g into A, a, and B
+template <size_t N>
+auto asTriple = [](const Group<N>& g)
+    -> std::tuple<const Rot3&, const Vector3&, const Calibrations<N>&> {
+  return std::tie(g.first.rotation(), g.first.translation(), g.second);
 };
 
 //========================================================================
@@ -242,12 +163,7 @@ struct Group : public ProductLieGroup<Pose3, Calibrations<n>> {
 //========================================================================
 
 /**
- * The symmetry group G is defined as the product Pose3 x Calibrations<n>.
- * The Pose3 component models the (SO(3) ⋉ R^3) part acting on attitude/bias,
- * while Calibrations<n> captures the N sensor calibration rotations.
- *
- * The group action is defined as a function object below,
- * applied to a given state x, specified in constructor.
+ * Right action φ_ξ(X) = (R A, Aᵀ(b − a), Aᵀ C B) on the state manifold.
  * Implements the right action φ_{ξ}(X) = (R A, Aᵀ(b − a), Aᵀ C B), where
  * ξ=(R,b,C). This is the discrete version of the homogeneous-space action in
  * Eq. (4) of Fornasier et al. (2022).
@@ -266,14 +182,14 @@ struct Symmetry : public GroupAction<Symmetry<N>, Group<N>, State<N>> {
   M operator()(const M& xi, const G& g,
                OptionalJacobian<M::dimension, M::dimension> Hm = {},
                OptionalJacobian<M::dimension, G::dimension> Hg = {}) const {
-    const Rot3 new_R = xi.R * g.A();
+    auto [A, a, B] = asTriple<N>(g);
+    const Rot3 new_R = xi.R * A;
     Matrix3 skew_p, At;  // derivatives of unrotate
-    const Point3 p = xi.b - g.a();
+    const Point3 p = xi.b - a;
     const Vector3 new_b =
-        g.A().unrotate(p, Hg ? &skew_p : nullptr, (Hg || Hm) ? &At : nullptr);
+        A.unrotate(p, Hg ? &skew_p : nullptr, (Hg || Hm) ? &At : nullptr);
     Calibrations<N> new_S;
-    const Calibrations<N>& B = g.calibrations();
-    Rot3 invA = g.A().inverse();  // derivative is (- A)
+    Rot3 invA = A.inverse();  // derivative is (- A)
     for (size_t i = 0; i < N; i++) {
       Rot3 SB = xi.S[i].compose(B[i]);  // derivative in B[i] is identity
       new_S[i] = invA.compose(SB);      // derivative in invA is SB^{-1}.
@@ -293,8 +209,7 @@ struct Symmetry : public GroupAction<Symmetry<N>, Group<N>, State<N>> {
       // multiplication by B[i]ᵀ in vector form.
       for (size_t i = 0; i < N; ++i) {
         const size_t row = 6 + 3 * i;
-        const Matrix3 BiT = g.calibrations()[i].matrix().transpose();
-        Hm->template block<3, 3>(row, row) = BiT;
+        Hm->template block<3, 3>(row, row) = B[i].transpose();
       }
     }
     if (Hg) {
@@ -307,12 +222,12 @@ struct Symmetry : public GroupAction<Symmetry<N>, Group<N>, State<N>> {
       Hg->template block<3, 3>(3, 3) = -I_3x3;  // - At * A (from translation()
 
       // Calibration blocks:
-      Matrix3 A = g.A().matrix();
+      Matrix3 A_matrix = A.matrix();
       for (size_t i = 0; i < N; ++i) {
         Rot3 SB = xi.S[i].compose(B[i]);
         const size_t row = 6 + 3 * i;
         const size_t col = 6 + 3 * i;
-        Hg->template block<3, 3>(row, 0) = -SB.transpose() * A;
+        Hg->template block<3, 3>(row, 0) = -SB.transpose() * A_matrix;
         Hg->template block<3, 3>(row, col) = I_3x3;
       }
     }
@@ -345,7 +260,7 @@ inline typename State<N>::TangentVector dynamics(const Vector3& omega,
 }
 
 /**
- * /// Implements the lift Λ(ξ,u) from the paper: Λ encodes the lifted dynamics
+ * Implements the lift Λ(ξ,u) from the paper: Λ encodes the lifted dynamics
  * on G induced by the biased gyroscope input u = (ω,0). Functor computing the
  * lifted tangent vector from a state and fixed input. In the notation of
  * Fornasier et al., this corresponds to Eq. (7), written in the so(3)≃ℝ³
@@ -394,7 +309,7 @@ struct Lift {
  * Encodes the partially applied input action ψ_u(X) = Aᵀ(ω − a), used to
  * compute A(X,u) and Φ(X,u). Functor encoding the right group action on the
  * mathematical input u. For a fixed u = (ω, 0), applying X = (A, a, B) ∈ G
- * yields φ_u(X) = (A^{-1}(ω - a), 0). The matrices A(X,u) and Φ(X,u) here match
+ * yields ψ_u(X) = (A^{-1}(ω - a), 0). The matrices A(X,u) and Φ(X,u) here match
  * the linearization in Eqs. (20) and (21), using ω̃ = Aᵀ(ω − a).
  */
 template <size_t N>
@@ -402,11 +317,9 @@ struct InputAction : public GroupAction<InputAction<N>, Group<N>, Vector6> {
   using G = Group<N>;
   static constexpr ActionType type = ActionType::Right;
 
-  Vector6 operator()(const Vector6& u, const G& X,
-                     OptionalJacobian<6, 6> H_u = {},
-                     OptionalJacobian<6, G::dimension> H_X = {}) const {
-    const Rot3 A = X.A();
-    const Vector3 a = X.a();
+  Vector6 operator()(const Vector6& u, const G& X) const {
+    const Rot3& A = X.first.rotation();
+    const Vector3& a = X.first.translation();
     Vector6 result;
     result.head<3>() = A.unrotate(u.head<3>() - a);
     result.tail<3>() = Z_3x1;
@@ -440,20 +353,23 @@ inline Matrix stateMatrixA(const typename InputAction<N>::Orbit& psi_u,
 
 /// Compute the input matrix B(X_hat).
 template <size_t N>
-inline Matrix inputMatrixB(const Group<N>& X_hat) {
-  const Matrix3 A_matrix = X_hat.A().matrix();
+inline Matrix inputMatrixB(const Group<N>& g) {
+  const Rot3& A = g.first.rotation();
+  const Calibrations<N>& B = g.second;
+  const Matrix3 A_matrix = A.matrix();
   Matrix B1 = gtsam::diag({A_matrix, A_matrix});
   Matrix B2(3 * N, 3 * N);
   B2.setZero();
   for (size_t i = 0; i < N; ++i) {
-    B2.block<3, 3>(3 * i, 3 * i) = X_hat.calibrations()[i].matrix();
+    B2.block<3, 3>(3 * i, 3 * i) = B[i].matrix();
   }
   return gtsam::diag({B1, B2});
 }
 
 /**
  * Functor encoding the right action ρ_y(X) on direction measurements y,
- * parameterized by the sensor index.
+ * parameterized by the sensor index. Use index = -1 for an uncalibrated
+ * sensor measured directly in the body frame.
  */
 template <size_t N>
 struct OutputAction : public GroupAction<OutputAction<N>, Group<N>, Vector3> {
@@ -466,15 +382,15 @@ struct OutputAction : public GroupAction<OutputAction<N>, Group<N>, Vector3> {
                      OptionalJacobian<3, 3> H_y = {},
                      OptionalJacobian<3, G::dimension> H_X = {}) const {
     if (H_X) H_X->setZero();
+    auto [A, a, B] = asTriple<N>(X);
     if (index_ == -1) {
       Matrix3 H_rot;
-      Vector3 res = X.A().unrotate(y, H_X ? &H_rot : nullptr, H_y);
+      Vector3 res = A.unrotate(y, H_X ? &H_rot : nullptr, H_y);
       if (H_X) H_X->template block<3, 3>(0, 0) = H_rot;
       return res;
     } else {
       Matrix3 H_rot;
-      Vector3 res =
-          X.calibrations()[index_].unrotate(y, H_X ? &H_rot : nullptr, H_y);
+      Vector3 res = B[index_].unrotate(y, H_X ? &H_rot : nullptr, H_y);
       if (H_X) H_X->template block<3, 3>(0, 6 + 3 * index_) = H_rot;
       return res;
     }
@@ -505,6 +421,7 @@ template <size_t N>
 struct Innovation {
   using M = State<N>;
 
+  /// Innovation ν = d×(ŷ) where ŷ is the predicted measurement under φ/ρ.
   Innovation(const Unit3& y, const Unit3& d, int index)
       : y_(y), d_(d), xi_ref_(M::identity()), index_(index) {}
 
@@ -516,8 +433,8 @@ struct Innovation {
     // Recover A and B_i from (xi_ref_, xi_hat) using the symmetry formulas:
     //   R_hat = R0 * A,   S_hat[i] = Aᵀ * S0[i] * B[i]
     const Rot3 R0 = xi_ref_.R;
-    const Rot3 Rhat = xi_hat.R;
-    const Rot3 A = R0.inverse() * Rhat;
+    const Rot3 R_hat = xi_hat.R;
+    const Rot3 A = R0.inverse() * R_hat;
 
     Vector3 transformed_y;
     if (index_ == -1) {
@@ -531,13 +448,12 @@ struct Innovation {
       transformed_y = Bi.rotate(y_.unitVector());
     }
 
-    const Matrix3 wedge_d = Rot3::Hat(d_.unitVector());
-    const Vector3 nu = wedge_d * transformed_y;
-
     if (H) {
       *H = measurementMatrixC<N>(d_, index_);
     }
-    return nu;
+
+    const Matrix3 wedge_d = Rot3::Hat(d_.unitVector());
+    return -wedge_d * transformed_y;
   }
 
   Unit3 y_;   // measured direction
@@ -548,10 +464,11 @@ struct Innovation {
 
 template <size_t N>
 inline Matrix3 outputMatrixD(const Group<N>& X_hat, int index) {
+  auto [A, a, B] = asTriple<N>(X_hat);
   if (index >= 0) {
-    return X_hat.calibrations()[index].matrix();
+    return B[index].matrix();
   } else {
-    return X_hat.A().matrix();
+    return A.matrix();
   }
 }
 
