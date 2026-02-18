@@ -38,19 +38,32 @@ namespace gtsam {
 
 class GaussianConditional;
 
+/// Map from variable key to dimension.
+using KeyDimMap = std::map<Key, size_t>;
+
 namespace internal {
 
-/// Helper class to track original factor indices.
+/// Helper class to track original factor indices and row counts.
 class IndexedSymbolicFactor : public SymbolicFactor {
  public:
   size_t index_;
-  IndexedSymbolicFactor(const KeyVector& keys, size_t index)
-      : SymbolicFactor(), index_(index) {
+  size_t rows_;
+  IndexedSymbolicFactor(const KeyVector& keys, size_t index, size_t rows)
+      : SymbolicFactor(), index_(index), rows_(rows) {
     keys_ = keys;
   }
-  IndexedSymbolicFactor(const GaussianFactor& factor, size_t index)
-      : SymbolicFactor(factor), index_(index) {}
 };
+
+/// Sum variable dimensions for a key range, skipping unknown keys.
+template <typename KeyRange>
+inline size_t sumDims(const KeyDimMap& dims, const KeyRange& keys) {
+  size_t dim = 0;
+  for (Key key : keys) {
+    auto it = dims.find(key);
+    if (it != dims.end()) dim += it->second;
+  }
+  return dim;
+}
 
 }  // namespace internal
 
@@ -63,7 +76,7 @@ class GTSAM_EXPORT MultifrontalClique {
   using Children = std::vector<shared_ptr>;
   struct ChildInfo {
     shared_ptr clique;
-    KeyVector separatorKeys;
+    KeySet separatorKeys;
   };
 
   std::weak_ptr<MultifrontalClique> parent;  ///< Parent clique.
@@ -77,15 +90,14 @@ class GTSAM_EXPORT MultifrontalClique {
   /// @param frontals Frontal keys for this clique.
   /// @param separatorKeys Separator keys for this clique.
   /// @param dims Key->dimension map.
-  /// @param graph Factor graph for sizing and constraints.
+  /// @param vbmRows Number of rows needed for the vertical block matrix.
   /// @param solution Solution storage for cached pointers.
   /// @param fixedKeys Keys fixed to zero by constraints (may be null).
   explicit MultifrontalClique(std::vector<size_t> factorIndices,
                               const std::weak_ptr<MultifrontalClique>& parent,
                               const KeyVector& frontals,
-                              const KeyVector& separatorKeys,
-                              const std::map<Key, size_t>& dims,
-                              const GaussianFactorGraph& graph,
+                              const KeySet& separatorKeys,
+                              const KeyDimMap& dims, size_t vbmRows,
                               VectorValues* solution,
                               const std::unordered_set<Key>* fixedKeys);
 
@@ -95,10 +107,31 @@ class GTSAM_EXPORT MultifrontalClique {
   /// Cache the children list and compute parent indices.
   void finalize(std::vector<ChildInfo> children);
 
-  /// Load factor values into the pre-allocated Ab matrix and Hessians into
-  /// sbm_.
+  /// Load factor values into the pre-allocated Ab matrix.
   /// @param graph The factor graph with updated values.
   void fillAb(const GaussianFactorGraph& graph);
+
+  /// Zero out sbm, re-add Hessians, accumulate Jacobians and children.
+  void prepareForElimination();
+
+  /// Perform Cholesky factorization on the frontal block.
+  void factorize();
+
+  /**
+   * Add identity damping to the frontal block.
+   * @param lambda Damping factor
+   */
+  void addIdentityDamping(double lambda);
+
+  /**
+   * Add diagonal damping to the frontal block.
+   * @param lambda Damping factor
+   * @param minDiagonal Minimum diagonal value
+   * @param maxDiagonal Maximum diagonal value
+   */
+  void addDiagonalDamping(double lambda, double minDiagonal,
+                          double maxDiagonal);
+
   /// @}
 
   /// @name Read-only methods
@@ -118,18 +151,11 @@ class GTSAM_EXPORT MultifrontalClique {
   /// Get the vertical block matrix Ab.
   const VerticalBlockMatrix& Ab() const { return Ab_; }
 
-  /// Get the symmetric block matrix (mutable).
-  SymmetricBlockMatrix& sbm() { return sbm_; }
-
   /// Get the symmetric block matrix (const).
   const SymmetricBlockMatrix& sbm() const { return sbm_; }
 
-  /**
-   * Count rows needed for the vertical block matrix.
-   * @param graph The factor graph.
-   * @return Total number of rows.
-   */
-  size_t countRows(const GaussianFactorGraph& graph) const;
+  /// Check if this clique is using QR elimination.
+  bool useQR() const { return solveMode_ == SolveMode::QrLeaf; }
 
   /**
    * Print this clique.
@@ -173,14 +199,19 @@ class GTSAM_EXPORT MultifrontalClique {
                                   const MultifrontalClique& clique);
 
  private:
+  enum class SolveMode { Cholesky, QrLeaf };
+
   /// Cache pointers to frontal and separator update vectors.
   void cacheSolutionPointers(VectorValues* delta, const KeyVector& frontals,
-                             const KeyVector& separatorKeys);
+                             const KeySet& separatorKeys);
+
+  /// Linear lookup for block index in small cliques.
+  DenseIndex blockIndex(Key key) const;
 
   /// Compute block dimensions from variable dimensions (excluding RHS).
-  std::vector<size_t> blockDims(const std::map<Key, size_t>& dims,
+  std::vector<size_t> blockDims(const KeyDimMap& dims,
                                 const KeyVector& frontals,
-                                const KeyVector& separatorKeys) const;
+                                const KeySet& separatorKeys) const;
 
   /**
    * Pre-allocate matrices for this clique.
@@ -189,6 +220,9 @@ class GTSAM_EXPORT MultifrontalClique {
    */
   void initializeMatrices(const std::vector<size_t>& blockDims,
                           size_t totalNumRows);
+
+  /// Allocate the symmetric block matrix if needed.
+  void allocateSbm();
 
   /**
    * Add a Jacobian factor's contributions into the Ab matrix.
@@ -202,20 +236,33 @@ class GTSAM_EXPORT MultifrontalClique {
   void setParentIndices(const std::vector<DenseIndex>& indices) {
     parentIndices_ = indices;
   }
+  // Build-time metadata.
+  std::vector<size_t> factorIndices_;
+  KeyVector orderedKeys_;  ///< Keys ordered by block index (frontals+seps).
+  const std::unordered_set<Key>* fixedKeys_ = nullptr;
+  std::vector<size_t> blockDims_;
+  std::vector<DenseIndex>
+      parentIndices_;  ///< Parent block indices for separators + RHS.
+  std::vector<Vector*> frontalPtrs_;  ///< Pointers into solution frontals.
+  std::vector<const Vector*>
+      separatorPtrs_;  ///< Pointers into solution separator.
+
+  // Load-time state.
   VerticalBlockMatrix Ab_;
+  std::vector<HessianFactor::shared_ptr> hessianFactors_;  ///< Hessian factors.
+  SolveMode solveMode_ = SolveMode::Cholesky;
+
+  // Elimination-time state.
   mutable SymmetricBlockMatrix sbm_;
+  mutable VerticalBlockMatrix RSd_;  ///< Cached [R S d] from elimination.
+  mutable bool RSdReady_ = false;
+
+  // Solve-time scratch space.
   mutable Vector rhsScratch_;  ///< Cached RHS workspace for back-substitution.
   mutable Vector
       separatorScratch_;  ///< Cached separator stack for back-substitution.
 
-  std::vector<size_t> factorIndices_;
-  std::map<Key, size_t> blockIndex_;  ///< Key->block index for fast Ab fills.
-  const std::unordered_set<Key>* fixedKeys_ = nullptr;
-  std::vector<DenseIndex>
-      parentIndices_;  ///< Parent block indices for separators and RHS.
-  std::vector<Vector*> frontalPtrs_;  ///< Pointers into solution frontals.
-  std::vector<const Vector*>
-      separatorPtrs_;  ///< Pointers into solution separator.
+  static constexpr double kQrAspectRatio = 2.0;
 };
 
 std::ostream& operator<<(std::ostream& os, const MultifrontalClique& clique);
