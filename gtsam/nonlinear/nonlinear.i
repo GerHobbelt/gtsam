@@ -20,6 +20,7 @@ namespace gtsam {
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/geometry/Similarity2.h>
 #include <gtsam/geometry/Similarity3.h>
+#include <gtsam/geometry/SphericalCamera.h>
 #include <gtsam/geometry/Rot2.h>
 #include <gtsam/geometry/Rot3.h>
 #include <gtsam/geometry/SO3.h>
@@ -300,6 +301,11 @@ enum GncLossType {
   TLS /*Truncated least squares*/
 };
 
+enum GncScheduler {
+  Linear,
+  SuperLinear
+};
+
 template<PARAMS>
 virtual class GncParams {
   GncParams(const PARAMS& baseOptimizerParams);
@@ -314,6 +320,7 @@ virtual class GncParams {
   gtsam::This::IndexVector knownInliers;
   gtsam::This::IndexVector knownOutliers;
   bool allowNonNoiseModelFactors;
+  gtsam::GncScheduler scheduler;
 
   void setLossType(const gtsam::GncLossType type);
   void setMaxIterations(const size_t maxIter);
@@ -324,6 +331,7 @@ virtual class GncParams {
   void setKnownInliers(const gtsam::This::IndexVector& knownIn);
   void setKnownOutliers(const gtsam::This::IndexVector& knownOut);
   void setAllowNonNoiseModelFactors(bool allow);
+  void setScheduler(const gtsam::GncScheduler scheduler);
   void print(const string& str = "GncParams: ") const;
   
   enum Verbosity {
@@ -429,6 +437,26 @@ class ISAM2DoglegParams {
   void setVerbose(bool verbose);
 };
 
+class ISAM2DoglegLineSearchParams {
+  ISAM2DoglegLineSearchParams();
+
+  void print(const std::string str = "") const;
+
+  /** Getters and Setters for all properties */
+  double getMinDelta() const;
+  double getMaxDelta() const;
+  double getStepSize() const;
+  double getSufficientDecreaseCoeff() const;
+  bool isVerbose() const;
+  double getWildfireThreshold() const;
+  void setMinDelta(double min_delta);
+  void setMaxDelta(double max_delta);
+  void setStepSize(double step_size);
+  void setSufficientDecreaseCoeff(double sufficient_decrease_coeff);
+  void setVerbose(bool verbose);
+  void setWildfireThreshold(double wildfire_threshold);
+};
+
 class ISAM2ThresholdMapValue {
   ISAM2ThresholdMapValue(char c, gtsam::Vector thresholds);
   ISAM2ThresholdMapValue(const gtsam::ISAM2ThresholdMapValue& other);
@@ -458,6 +486,7 @@ class ISAM2Params {
   void setOptimizationParams(
       const gtsam::ISAM2GaussNewtonParams& gauss_newton__params);
   void setOptimizationParams(const gtsam::ISAM2DoglegParams& optimizationParams);
+  void setOptimizationParams(const gtsam::ISAM2DoglegLineSearchParams& optimizationParams);
   void setRelinearizeThreshold(double relinearizeThreshold);
   void setRelinearizeThreshold(const gtsam::ISAM2ThresholdMap& threshold_map);
   string getFactorization() const;
@@ -562,6 +591,9 @@ class ISAM2 {
 
   void printStats() const;
   gtsam::VectorValues gradientAtZero() const;
+  std::pair<gtsam::KeySet, bool> predictUpdateInfo(
+      const gtsam::NonlinearFactorGraph& newFactors, const gtsam::Values& newTheta,
+      const gtsam::ISAM2UpdateParams& updateParams) const;
 
   string dot(const gtsam::KeyFormatter& keyFormatter =
                  gtsam::DefaultKeyFormatter) const;
@@ -623,6 +655,7 @@ template <T = {double,
                gtsam::PinholeCamera<gtsam::Cal3Bundler>,
                gtsam::PinholeCamera<gtsam::Cal3Fisheye>,
                gtsam::PinholeCamera<gtsam::Cal3Unified>,
+               gtsam::SphericalCamera,
                gtsam::NavState,
                gtsam::imuBias::ConstantBias}>
 virtual class PriorFactor : gtsam::NoiseModelFactor {
@@ -731,6 +764,7 @@ template <T = {gtsam::Point2, gtsam::StereoPoint2, gtsam::Point3, gtsam::Rot2,
                gtsam::PinholeCamera<gtsam::Cal3Bundler>,
                gtsam::PinholeCamera<gtsam::Cal3Fisheye>,
                gtsam::PinholeCamera<gtsam::Cal3Unified>,
+               gtsam::SphericalCamera,
                gtsam::imuBias::ConstantBias}>
 virtual class NonlinearEquality : gtsam::NoiseModelFactor {
   // Constructor - forces exact evaluation
