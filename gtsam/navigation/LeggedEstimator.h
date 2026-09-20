@@ -194,7 +194,11 @@ class GTSAM_EXPORT LeggedInvariantEKF : public LeftLinearEKF<ExtendedPose3d>,
     }
 
     /// Advance the position block while keeping velocity and footholds fixed.
-    ExtendedPose3d operator()(const ExtendedPose3d& state) const;
+    ExtendedPose3d operator()(const ExtendedPose3d& state) const {
+      Matrix blocks = state.xMatrix();
+      blocks.col(0) += blocks.col(1) * dt;
+      return ExtendedPose3d(state.rotation(), blocks);
+    }
     size_t numFeet;
     double dt;
   };
