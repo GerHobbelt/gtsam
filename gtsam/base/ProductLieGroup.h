@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <gtsam/base/GroupAction.h>
 #include <gtsam/base/Lie.h>
 #include <gtsam/base/Testable.h>
 
@@ -26,16 +27,55 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>  // pair
 #include <vector>
 
 namespace gtsam {
 
+/// Detects whether Action has a static generator() method.
+/// Used to enable the generic semidirect Expmap/Logmap via the φ₁ kernel.
+template <typename T, typename G_TanVec, typename = void>
+struct HasGenerator : std::false_type {};
+template <typename T, typename G_TanVec>
+struct HasGenerator<T, G_TanVec,
+                    std::void_t<decltype(T::generator(std::declval<G_TanVec>()))>>
+    : std::true_type {};
+
+/// Detects vector-space Lie groups (Eigen column vectors, group law = addition).
+template <typename T>
+struct IsVectorGroup : std::false_type {};
+template <int N>
+struct IsVectorGroup<Eigen::Matrix<double, N, 1>> : std::true_type {};
+
 /**
- * @brief Template to construct the product Lie group of two other Lie groups
- * Assumes Lie group structure for G and H
+ * @brief Product Lie group of G and H, optionally with a semidirect structure.
+ *
+ * When Action is omitted (default void), this is the direct product G × H:
+ * operations are componentwise and tangent vectors concatenate independently.
+ *
+ * When Action is provided, this is the left semidirect product G ⋉ H, where G
+ * acts on H via the left group action φ: G × H → H. The group law becomes:
+ *
+ *   (g₁, h₁) · (g₂, h₂) = (g₁g₂,  h₁ · φ(g₁, h₂))
+ *   (g, h)⁻¹             = (g⁻¹,   φ(g⁻¹, h⁻¹))
+ *
+ * Action must derive from GroupAction<Action, G, H> and implement:
+ *   - operator()(g, h, Hg={}, Hh={}): the group action with optional
+ *     Jacobians w.r.t. g (DimH×DimG) and h (DimH×DimH). These Jacobians are
+ *     used to automatically derive the AdjointMap.
+ *
+ * Semidirect products require H to be a fixed-size vector-space Lie group
+ * (Eigen column vector) and the action to supply the infinitesimal generator:
+ *   - static Jacobian_H generator(const TangentVector_G& u): returns the
+ *     DimH×DimH matrix Aφ(u) = d/dt φ(expG(t·u), ·)|_{t=0} (linear in u).
+ *     Expmap and Logmap are derived automatically via φ₁(Aφ(u)).
+ *
+ * Example: SE(3) as a semidirect product:
+ *   using SE3 = ProductLieGroup<Rot3, Vector3, Rot3VectorAction>;
+ * where Rot3VectorAction implements φ(R, t) = R·t.
  */
-template <typename G, typename H>
+template <typename G, typename H, typename Action = void>
 class ProductLieGroup : public std::pair<G, H> {
   GTSAM_CONCEPT_ASSERT(IsLieGroup<G>);
   GTSAM_CONCEPT_ASSERT(IsLieGroup<H>);
@@ -52,6 +92,14 @@ class ProductLieGroup : public std::pair<G, H> {
   inline constexpr static int dimension2 = traits<H>::dimension;
   inline constexpr static bool firstDynamic = dimension1 == Eigen::Dynamic;
   inline constexpr static bool secondDynamic = dimension2 == Eigen::Dynamic;
+  inline constexpr static bool isDirectProduct = std::is_void_v<Action>;
+  /// True when the semidirect product has the required generator support.
+  inline constexpr static bool hasGenerator =
+      !isDirectProduct && IsVectorGroup<H>::value && !secondDynamic &&
+      HasGenerator<Action, typename traits<G>::TangentVector>::value;
+  static_assert(isDirectProduct || hasGenerator,
+                "ProductLieGroup semidirect products require H to be a "
+                "fixed-size Eigen column vector and Action::generator(u).");
 
  public:
   /// Manifold dimension
@@ -74,6 +122,11 @@ class ProductLieGroup : public std::pair<G, H> {
                          Eigen::Matrix<double, dimension, dimension>>;
   using Jacobian1 = typename traits<G>::Jacobian;
   using Jacobian2 = typename traits<H>::Jacobian;
+  /// Jacobian of the action w.r.t. G (DimH × DimG), used in the generic
+  /// semidirect AdjointMap formula.
+  using ActionJacobianG =
+      std::conditional_t<firstDynamic || secondDynamic, Matrix,
+                         Eigen::Matrix<double, dimension2, dimension1>>;
 
  public:
   /// @name Standard Constructors
@@ -213,6 +266,11 @@ class ProductLieGroup : public std::pair<G, H> {
   /// Check that another product has matching runtime dimensions.
   void checkMatchingDimensions(const ProductLieGroup& other,
                                const char* operation) const;
+
+  /// Compute φ₀(A) = exp(A) and φ₁(A) = Σ_{k≥0} Aᵏ/(k+1)! together.
+  /// Uses the identity: exp([[A, I], [0, 0]]) = [[φ₀(A), φ₁(A)], [0, I]].
+  /// Only valid (and only called) when hasGenerator is true.
+  static std::pair<Jacobian2, Jacobian2> phi01Kernel(const Jacobian2& A);
 
  public:
   /// @name Testable interface
@@ -523,9 +581,9 @@ class PowerLieGroup<G, Eigen::Dynamic>
 };
 
 /// Traits specialization for ProductLieGroup
-template <typename G, typename H>
-struct traits<ProductLieGroup<G, H>>
-    : internal::LieGroup<ProductLieGroup<G, H>> {};
+template <typename G, typename H, typename Action>
+struct traits<ProductLieGroup<G, H, Action>>
+    : internal::LieGroup<ProductLieGroup<G, H, Action>> {};
 
 /// Traits specialization for PowerLieGroup
 template <typename G, int N>
