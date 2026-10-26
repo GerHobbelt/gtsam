@@ -19,13 +19,14 @@
 #include <gtsam/base/cuda/Context.h>
 #include <gtsam/geometry/PinholeCamera.h>
 #include <gtsam/inference/Symbol.h>
+#include <gtsam/linear/cuda/internal/BlockOrdering.h>
 #include <gtsam/nonlinear/BatchFactor.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
-#include <gtsam/nonlinear/cuda/internal/DeviceGeometryKernels.h>
-#include <gtsam/nonlinear/cuda/internal/DeviceGeometryTypes.h>
 #include <gtsam/sfm/SfmData.h>
 #include <gtsam/slam/GeneralSFMFactor.h>
 #include <gtsam/sfm/cuda/SfmLevenbergMarquardt.h>
+#include <gtsam/sfm/cuda/internal/DeviceGeometryKernels.h>
+#include <gtsam/sfm/cuda/internal/DeviceGeometryTypes.h>
 #include <gtsam/sfm/cuda/internal/SfmDenseSchurSolver.h>
 #include <gtsam/sfm/cuda/internal/SfmProjectionBatch.h>
 #include <gtsam/sfm/cuda/internal/SfmProjectionLinearization.h>
@@ -540,6 +541,14 @@ TEST(SfmReducedCsrPlan, BuildsStableCameraOnlyCovisibilityPattern) {
   const SfmReducedCsrPlan repeated(data, cameraKeys);
 
   LONGS_EQUAL(36, plan.dimension());
+  EXPECT(plan.cameraKeyInfo().ordering() == Ordering(cameraKeys.begin(),
+                                                     cameraKeys.end()));
+  for (size_t camera = 0; camera < cameraKeys.size(); ++camera) {
+    const KeyInfoEntry& entry = plan.cameraKeyInfo().at(cameraKeys[camera]);
+    LONGS_EQUAL(camera, entry.index);
+    LONGS_EQUAL(9, entry.dim);
+    LONGS_EQUAL(9 * camera, entry.start);
+  }
   EXPECT(plan.rowPointers() == repeated.rowPointers());
   EXPECT(plan.columnIndices() == repeated.columnIndices());
   EXPECT(plan.hasCameraPair(0, 0));
@@ -559,7 +568,7 @@ TEST(SfmReducedCsrPlan, BuildsStableCameraOnlyCovisibilityPattern) {
   }
 
   const std::vector<int> scalarPermutation = compileScalarPermutation(
-      plan.cameraBlocks(), Ordering{C(2), C(0), C(3), C(1)});
+      plan.cameraKeyInfo(), Ordering{C(2), C(0), C(3), C(1)});
   std::vector<int> expected;
   for (const int camera : {2, 0, 3, 1}) {
     for (int scalar = 0; scalar < 9; ++scalar) {
@@ -581,8 +590,9 @@ TEST(SfmLevenbergMarquardtParams, ProvidesLmDefaults) {
   DOUBLES_EQUAL(10.0, legacy.lambdaFactor, 0.0);
   CHECK(!legacy.dampingParams.diagonalDamping);
   CHECK(!legacy.enableDetailedProfiling);
+  CHECK(legacy.getEliminationMode() == SfmEliminationMode::Schur);
 
-  const SfmLevenbergMarquardtParams ceres =
+  SfmLevenbergMarquardtParams ceres =
       SfmLevenbergMarquardtParams::ceresDefaults();
   CHECK(ceres.maxIterations == 50);
   DOUBLES_EQUAL(1e-4, ceres.lambdaInitial, 0.0);
@@ -590,6 +600,13 @@ TEST(SfmLevenbergMarquardtParams, ProvidesLmDefaults) {
   CHECK(ceres.dampingParams.diagonalDamping);
   CHECK(!ceres.useFixedLambdaFactor);
   CHECK(!ceres.enableDetailedProfiling);
+  CHECK(ceres.getEliminationMode() == SfmEliminationMode::Schur);
+
+  ceres.setEliminationMode(SfmEliminationMode::Full);
+  const auto clone = std::dynamic_pointer_cast<SfmLevenbergMarquardtParams>(
+      ceres.clone());
+  CHECK(clone != nullptr);
+  CHECK(clone->getEliminationMode() == SfmEliminationMode::Full);
 }
 
 // Verifies SfmLevenbergMarquardtOptimizer::ExposesCudaParams.
@@ -599,11 +616,14 @@ TEST(SfmLevenbergMarquardtOptimizer, ExposesCudaParams) {
   SfmLevenbergMarquardtParams params =
       SfmLevenbergMarquardtParams::ceresDefaults();
   params.setLinearSolver(LinearSolverType::Cudss);
+  params.setEliminationMode(SfmEliminationMode::Schur);
   params.maxIterations = 7;
 
   SfmLevenbergMarquardtOptimizer optimizer(graph, initial, params);
 
   CHECK(optimizer.params().getLinearSolver() == LinearSolverType::Cudss);
+  CHECK(optimizer.params().getEliminationMode() ==
+        SfmEliminationMode::Schur);
   CHECK(optimizer.params().maxIterations == 7);
 }
 
@@ -611,6 +631,21 @@ TEST(SfmLevenbergMarquardtOptimizer, ExposesCudaParams) {
 TEST(SfmLevenbergMarquardtOptimizer, UsesBatchOnlyInterface) {
   CHECK((!std::is_base_of_v<NonlinearOptimizer,
                              SfmLevenbergMarquardtOptimizer>));
+}
+
+// Verifies that the public Full hook fails before any CUDA backend work.
+TEST(SfmLevenbergMarquardt, FullModeIsReserved) {
+  SfmLevenbergMarquardtParams params;
+  params.setEliminationMode(SfmEliminationMode::Full);
+  bool threw = false;
+  try {
+    optimizeSfmWithoutValueDownload(sfm_fixture::makeTinySfmData(), params);
+  } catch (const std::invalid_argument& error) {
+    threw = true;
+    CHECK(std::string(error.what()).find("Full elimination mode is not "
+                                        "implemented") != std::string::npos);
+  }
+  CHECK(threw);
 }
 
 // Verifies SfmProjectionLinearization::MatchesHostResidualsAndNumericJacobians.
@@ -1264,7 +1299,7 @@ TEST(SfmLevenbergMarquardt,
   CHECK(sparse.linearSystemNonzeros > 0);
   EXPECT(sparse.appliedScalarPermutation ==
          compileScalarPermutation(
-             SfmReducedCsrPlan(data, {C(0), C(1)}).cameraBlocks(),
+             SfmReducedCsrPlan(data, {C(0), C(1)}).cameraKeyInfo(),
              *sparseParams.ordering));
 }
 
