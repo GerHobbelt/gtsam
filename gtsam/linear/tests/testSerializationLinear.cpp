@@ -247,5 +247,114 @@ TEST (Serialization, gaussian_bayes_tree) {
 }
 
 /* ************************************************************************* */
+namespace bayes_tree_serialization {
+
+using Clique = GaussianBayesTreeClique;
+
+Clique::shared_ptr makeRoot(Key key) {
+  return std::make_shared<Clique>(std::make_shared<GaussianConditional>(
+      key, Vector{{0.0}}, Matrix{{1.0}}));
+}
+
+Clique::shared_ptr makeChild(Key key, Key parent) {
+  return std::make_shared<Clique>(std::make_shared<GaussianConditional>(
+      key, Vector{{0.0}}, Matrix{{1.0}}, parent, Matrix{{-1.0}}));
+}
+
+Key frontal(const Clique::shared_ptr& clique) {
+  return clique->conditional()->frontals().front();
+}
+
+/** Serializes the recursive Bayes tree representation used by version 0. */
+struct LegacyGaussianBayesTree {
+  GaussianBayesTree::Nodes nodes;
+  GaussianBayesTree::Roots roots;
+
+  explicit LegacyGaussianBayesTree(const GaussianBayesTree& tree)
+      : nodes(tree.nodes()), roots(tree.roots()) {}
+
+  template <class Archive>
+  void serialize(Archive& archive, const unsigned int /*version*/) {
+    archive & boost::serialization::make_nvp("nodes_", nodes);
+    archive & boost::serialization::make_nvp("roots_", roots);
+  }
+};
+
+// Verifies that a deep chain round-trips without recursive serialization.
+TEST(Serialization, LargeGaussianBayesTree) {
+  constexpr size_t kCliqueCount = 10000;
+  GaussianBayesTree input;
+  Clique::shared_ptr parent = makeRoot(kCliqueCount - 1);
+  input.insertRoot(parent);
+  for (size_t key = kCliqueCount - 1; key-- > 0;) {
+    Clique::shared_ptr child = makeChild(key, key + 1);
+    input.addClique(child, parent);
+    parent = child;
+  }
+
+  GaussianBayesTree actual;
+  roundtripBinary(input, actual);
+
+  EXPECT_LONGS_EQUAL(kCliqueCount, actual.nodes().size());
+  EXPECT_LONGS_EQUAL(1, actual.roots().size());
+  Clique::shared_ptr previous, clique = actual.roots().front();
+  for (size_t key = kCliqueCount; key-- > 0;) {
+    EXPECT_LONGS_EQUAL(key, frontal(clique));
+    EXPECT(actual[key] == clique);
+    EXPECT(clique->parent() == previous);
+    EXPECT_LONGS_EQUAL(key == 0 ? 0 : 1, clique->nrChildren());
+    previous = clique;
+    if (key != 0) clique = clique->children.front();
+  }
+}
+
+// Verifies that root and child ordering survive a flat round-trip.
+TEST(Serialization, GaussianBayesTreeStructure) {
+  GaussianBayesTree input;
+  Clique::shared_ptr firstRoot = makeRoot(10), secondRoot = makeRoot(20);
+  input.insertRoot(firstRoot);
+  input.addClique(makeChild(11, 10), firstRoot);
+  input.addClique(makeChild(12, 10), firstRoot);
+  input.insertRoot(secondRoot);
+  input.addClique(makeChild(21, 20), secondRoot);
+
+  GaussianBayesTree actual;
+  roundtripBinary(input, actual);
+
+  EXPECT_LONGS_EQUAL(2, actual.roots().size());
+  EXPECT_LONGS_EQUAL(10, frontal(actual.roots()[0]));
+  EXPECT_LONGS_EQUAL(20, frontal(actual.roots()[1]));
+  EXPECT_LONGS_EQUAL(11, frontal(actual.roots()[0]->children[0]));
+  EXPECT_LONGS_EQUAL(12, frontal(actual.roots()[0]->children[1]));
+  EXPECT_LONGS_EQUAL(21, frontal(actual.roots()[1]->children[0]));
+}
+
+// Verifies loading the recursive format written before BayesTree version 1.
+TEST(Serialization, LegacyGaussianBayesTree) {
+  GaussianBayesTree input;
+  input.insertRoot(makeRoot(7));
+
+  LegacyGaussianBayesTree legacy(input);
+  stringstream stream;
+  {
+    boost::archive::text_oarchive archive(stream);
+    archive << legacy;
+  }
+
+  GaussianBayesTree actual;
+  {
+    boost::archive::text_iarchive archive(stream);
+    archive >> actual;
+  }
+
+  EXPECT_LONGS_EQUAL(1, actual.nodes().size());
+  EXPECT_LONGS_EQUAL(1, actual.roots().size());
+  EXPECT_LONGS_EQUAL(7, frontal(actual.roots().front()));
+}
+
+}  // namespace bayes_tree_serialization
+/* ************************************************************************* */
+
+/* ************************************************************************* */
 int main() { TestResult tr; return TestRegistry::runAllTests(tr); }
 /* ************************************************************************* */
