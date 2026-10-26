@@ -29,6 +29,8 @@
 #include <gtsam/linear/NoiseModel.h>
 
 #include <iosfwd>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -44,6 +46,9 @@ class GTSAM_EXPORT PreintegrationBase {
  public:
   typedef imuBias::ConstantBias Bias;
   typedef PreintegrationParams Params;
+
+  /// Legacy factor-error choice for this preintegration backend.
+  inline static constexpr bool kLegacyUsesLogmap = false;
 
  protected:
   std::shared_ptr<Params> p_;
@@ -221,9 +226,31 @@ Vector9 preintegrationError(
       H4 ? &D_predict_gravity : nullptr);
 
   Matrix9 D_error_state_j, D_error_predict;
-  const Vector9 error = state_j.localCoordinates(
-      predictedState_j, H2 ? &D_error_state_j : nullptr,
-      H1 || H3 || H4 ? &D_error_predict : nullptr);
+  Vector9 error;
+  bool useLogmap;
+  switch (pim.params()->getImuFactorErrorMode()) {
+    case ImuFactorErrorMode::Legacy:
+      useLogmap = PIM::kLegacyUsesLogmap;
+      break;
+    case ImuFactorErrorMode::ComponentWise:
+      useLogmap = false;
+      break;
+    case ImuFactorErrorMode::Logmap:
+      useLogmap = true;
+      break;
+    default:
+      throw std::invalid_argument("Unknown ImuFactorErrorMode");
+  }
+
+  if (useLogmap) {
+    error = state_j.logmap(predictedState_j,
+                           H2 ? &D_error_state_j : nullptr,
+                           H1 || H3 || H4 ? &D_error_predict : nullptr);
+  } else {
+    error = internal::navStateComponentWiseLocalCoordinates(
+        state_j, predictedState_j, H2 ? &D_error_state_j : nullptr,
+        H1 || H3 || H4 ? &D_error_predict : nullptr);
+  }
 
   if (H1) *H1 = D_error_predict * D_predict_state_i;
   if (H2) *H2 = D_error_state_j;
@@ -314,6 +341,40 @@ struct GravityParametrization<Point3> {
     return gravity;
   }
 };
+
+/**
+ * Resolve the gravity magnitude stored by the gravity-aware IMU factors at
+ * construction. For a parametrization with a fixed magnitude (Unit3) this is
+ * the given value, or by default the norm of the gravity vector in the
+ * preintegration params, and it must be positive. For the free-vector
+ * parametrization (Point3) the magnitude is part of the optimized variable,
+ * so none may be given and the stored value is unused. Throws
+ * std::invalid_argument on misuse, including preintegrated measurements
+ * without params when the default is needed.
+ */
+template <class GRAVITY, class PIM>
+double resolveGravityMagnitude(const std::string& factorName, const PIM& pim,
+                               const std::optional<double>& gravityMagnitude) {
+  if (!GravityParametrization<GRAVITY>::usesMagnitude) {
+    if (gravityMagnitude)
+      throw std::invalid_argument(
+          factorName + ": gravityMagnitude is only used by the Unit3 "
+          "parametrization; the Point3 parametrization optimizes the magnitude "
+          "as part of the gravity variable - to constrain it, add a "
+          "VectorNormFactor<3> on the gravity variable instead");
+    return 0.0;
+  }
+  if (!gravityMagnitude && !pim.params())
+    throw std::invalid_argument(
+        factorName + ": the preintegrated measurements have no params to take "
+        "the default gravityMagnitude from");
+  const double magnitude =
+      gravityMagnitude ? *gravityMagnitude : pim.params()->n_gravity.norm();
+  if (!(magnitude > 0.0))
+    throw std::invalid_argument(factorName +
+                                ": gravityMagnitude must be positive");
+  return magnitude;
+}
 
 }  // namespace internal
 

@@ -179,20 +179,15 @@ public:
   }
 
   /**
-   * Manifold retract used by optimization.
-   * This intentionally uses a component-wise chart (R via Expmap, and p/v via
-   * world-frame rotation of the tangent increments), not the default LieGroup
-   * chart based on full Expmap/Logmap.
+   * Manifold retract used by optimization. The compile-time option
+   * GTSAM_NAVSTATE_EXPMAP selects the full Lie Expmap; otherwise this uses the
+   * component-wise chart.
    */
   NavState retract(const Vector9& v, //
       OptionalJacobian<9, 9> H1 = {}, OptionalJacobian<9, 9> H2 =
           {}) const;
 
-  /**
-   * Inverse of the custom manifold chart used by retract.
-   * Kept consistent with retract for optimization; Lie expmap/logmap remain
-   * available separately for group operations.
-   */
+  /// Inverse of the optimization chart selected by GTSAM_NAVSTATE_EXPMAP.
   Vector9 localCoordinates(const NavState& g, //
       OptionalJacobian<9, 9> H1 = {}, OptionalJacobian<9, 9> H2 =
           {}) const;
@@ -230,24 +225,41 @@ public:
                   OptionalJacobian<9, 3> G1 = {},
                   OptionalJacobian<9, 3> G2 = {}) const;
 
-  /// Compute the legacy approximate tangent-space Coriolis contribution.
-  [[deprecated("Use correctPIM with omegaCoriolis for exact prediction")]]
+#ifdef GTSAM_ALLOW_DEPRECATED_SINCE_V43
+  /**
+   * Compute the legacy approximate tangent-space Coriolis contribution.
+   * @deprecated Configure omegaCoriolis and use a concrete PIM's predict()
+   * method for exact rotating-frame dynamics.
+   */
   Vector9 coriolis(double dt, const Vector3& omega, bool secondOrder = false,
                    OptionalJacobian<9, 9> H = {}) const;
 
-  /// Correct a preintegrated tangent vector using the initial state and
-  /// gravity. If omegaCoriolis is present and nonzero, uses the exact
-  /// rotating-frame transition of Brossard et al.; otherwise preserves the
-  /// inertial fast path.
+  /**
+   * Correct a preintegrated tangent vector using the initial state and gravity.
+   * @deprecated Use a concrete PIM's predict() method, which returns the
+   * predicted NavState directly and supports exact rotating-frame dynamics.
+   */
   Vector9 correctPIM(const Vector9& pim, double dt, const Vector3& n_gravity,
-      const std::optional<Vector3>& omegaCoriolis, bool use2ndOrderCoriolis =
-          false, OptionalJacobian<9, 9> H1 = {},
-      OptionalJacobian<9, 9> H2 = {},
-      OptionalJacobian<9, 3> H3 = {}) const;
+                     const std::optional<Vector3>& omegaCoriolis,
+                     bool use2ndOrderCoriolis = false,
+                     OptionalJacobian<9, 9> H1 = {},
+                     OptionalJacobian<9, 9> H2 = {},
+                     OptionalJacobian<9, 3> H3 = {}) const;
+#endif
 
   /// @}
 
 private:
+  friend class PreintegrationBase;
+
+  // Return the predicted state directly, avoiding a local/retract round-trip.
+  NavState predictPIM(const Vector9& pim, double dt,
+                      const Vector3& n_gravity,
+                      const std::optional<Vector3>& omegaCoriolis,
+                      OptionalJacobian<9, 9> H1 = {},
+                      OptionalJacobian<9, 9> H2 = {},
+                      OptionalJacobian<9, 3> H3 = {}) const;
+
   /// @{
   /// serialization
 #if GTSAM_ENABLE_BOOST_SERIALIZATION  ///
@@ -260,7 +272,21 @@ private:
   /// @}
 };
 
-// Specialize NavState traits to use a Retract/Local that agrees with IMUFactors
+namespace internal {
+
+/** Component-wise NavState retraction independent of the optimization chart. */
+GTSAM_EXPORT NavState navStateComponentWiseRetract(
+    const NavState& state, const Vector9& v,
+    OptionalJacobian<9, 9> H1 = {}, OptionalJacobian<9, 9> H2 = {});
+
+/** Component-wise NavState local coordinates independent of optimization. */
+GTSAM_EXPORT Vector9 navStateComponentWiseLocalCoordinates(
+    const NavState& state, const NavState& other,
+    OptionalJacobian<9, 9> H1 = {}, OptionalJacobian<9, 9> H2 = {});
+
+}  // namespace internal
+
+// Specialize NavState traits to use the configured optimization chart.
 template <>
 struct traits<NavState> : public internal::MatrixLieGroup<NavState, 5> {};
 

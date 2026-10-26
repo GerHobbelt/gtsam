@@ -30,11 +30,14 @@
 #include <gtsam/navigation/CombinedImuFactorWithGravity.h>
 #include <gtsam/navigation/DopplerFactor.h>
 #include <gtsam/navigation/GPSFactor.h>
+#include <gtsam/navigation/GalileanImuFactor.h>
 #include <gtsam/navigation/ImuFactor.h>
 #include <gtsam/navigation/ImuFactorWithGravity.h>
 #include <gtsam/navigation/PseudorangeFactor.h>
 
 #include <fstream>
+#include <sstream>
+#include <type_traits>
 
 using namespace std;
 using namespace gtsam;
@@ -53,20 +56,91 @@ BOOST_CLASS_EXPORT_GUID(PreintegrationCombinedParams,
                         "gtsam_PreintegrationCombinedParams")
 BOOST_CLASS_EXPORT_GUID(PreintegratedCombinedMeasurements,
                         "gtsam_PreintegratedCombinedMeasurements")
+BOOST_CLASS_EXPORT_GUID(PreintegratedImuMeasurementsG,
+                        "gtsam_PreintegratedImuMeasurementsG")
+BOOST_CLASS_EXPORT_GUID(GalileanImuFactor, "gtsam_GalileanImuFactor")
+BOOST_CLASS_EXPORT_GUID(PreintegratedCombinedMeasurementsG,
+                        "gtsam_PreintegratedCombinedMeasurementsG")
+BOOST_CLASS_EXPORT_GUID(GalileanCombinedImuFactor,
+                        "gtsam_GalileanCombinedImuFactor")
 
 /* ************************************************************************* */
+#ifdef GTSAM_ALLOW_DEPRECATED_SINCE_V43
+// Legacy archives keep the ignored flag even though it no longer affects
+// equality or prediction.
 TEST(PreintegrationParams, LegacySecondOrderFlagSerialization) {
   PreintegrationParams input(Vector3(0.1, -0.2, -9.8));
   input.omegaCoriolis = Vector3(1e-5, -2e-5, 7e-5);
-  input.use2ndOrderCoriolis = true;
+  input.setUse2ndOrderCoriolis(true);
 
   PreintegrationParams output;
   roundtrip(input, output);
-  EXPECT(output.use2ndOrderCoriolis);
+  EXPECT(output.getUse2ndOrderCoriolis());
 
   PreintegrationParams semanticallyEquivalent = input;
-  semanticallyEquivalent.use2ndOrderCoriolis = false;
+  semanticallyEquivalent.setUse2ndOrderCoriolis(false);
   EXPECT(input.equals(semanticallyEquivalent, 1e-9));
+}
+#endif
+
+/* ************************************************************************* */
+// Verifies the IMU factor-error mode participates in equality and archives.
+TEST(PreintegrationParams, ImuFactorErrorModeSerialization) {
+  PreintegrationParams input(Vector3(0.1, -0.2, -9.8));
+  EXPECT_LONGS_EQUAL(
+      static_cast<long>(ImuFactorErrorMode::Logmap),
+      static_cast<long>(input.getImuFactorErrorMode()));
+
+  PreintegrationParams legacy = input;
+  legacy.setImuFactorErrorMode(ImuFactorErrorMode::Legacy);
+  EXPECT(!legacy.equals(input, 1e-9));
+
+  std::ostringstream captured;
+  std::streambuf* previous = std::cout.rdbuf(captured.rdbuf());
+  input.print();
+  std::cout.rdbuf(previous);
+  EXPECT(captured.str().find("imuFactorErrorMode = Logmap") !=
+         std::string::npos);
+
+  PreintegrationParams output;
+  roundtrip(input, output);
+  EXPECT(input.equals(output, 1e-9));
+  EXPECT_LONGS_EQUAL(
+      static_cast<long>(ImuFactorErrorMode::Logmap),
+      static_cast<long>(output.getImuFactorErrorMode()));
+
+  PreintegrationParams legacyOutput;
+  roundtrip(legacy, legacyOutput);
+  EXPECT(legacy.equals(legacyOutput, 1e-9));
+  EXPECT_LONGS_EQUAL(
+      static_cast<long>(ImuFactorErrorMode::Legacy),
+      static_cast<long>(legacyOutput.getImuFactorErrorMode()));
+}
+
+namespace {
+
+// Minimal loading archive used to exercise the version-0 compatibility path.
+class VersionZeroLoadingArchive {
+ public:
+  using is_loading = std::true_type;
+
+  template <class T>
+  VersionZeroLoadingArchive& operator&(const T&) {
+    return *this;
+  }
+};
+
+}  // namespace
+
+/* ************************************************************************* */
+// Version-0 archives predate the stored mode and must retain Legacy behavior.
+TEST(PreintegrationParams, VersionZeroArchiveUsesLegacyMode) {
+  PreintegrationParams loaded(Vector3(0.0, 0.0, -9.81));
+  EXPECT(loaded.getImuFactorErrorMode() == ImuFactorErrorMode::Logmap);
+
+  VersionZeroLoadingArchive archive;
+  boost::serialization::access::serialize(archive, loaded, 0);
+  EXPECT(loaded.getImuFactorErrorMode() == ImuFactorErrorMode::Legacy);
 }
 
 /* ************************************************************************* */
@@ -155,6 +229,23 @@ TEST(ImuFactorWithGravity, serialization) {
 }
 
 /* ************************************************************************* */
+// Round-trips the NavState-based gravity factors; the non-default magnitude
+// verifies it is restored from the archive, not recomputed from the params.
+TEST(ImuFactor2WithGravity, serialization) {
+  auto pim = getPreintegratedMeasurements<PreintegratedImuMeasurements>();
+
+  ImuFactor2WithGravityDirection direction(1, 2, 3, 4, pim, 1.62);
+  EXPECT(equalsObj<ImuFactor2WithGravityDirection>(direction));
+  EXPECT(equalsXML<ImuFactor2WithGravityDirection>(direction));
+  EXPECT(equalsBinary<ImuFactor2WithGravityDirection>(direction));
+
+  ImuFactor2WithGravityVector vector(1, 2, 3, 4, pim);
+  EXPECT(equalsObj<ImuFactor2WithGravityVector>(vector));
+  EXPECT(equalsXML<ImuFactor2WithGravityVector>(vector));
+  EXPECT(equalsBinary<ImuFactor2WithGravityVector>(vector));
+}
+
+/* ************************************************************************* */
 TEST(CombinedImuFactor, Serialization) {
   auto pim = getPreintegratedMeasurements<PreintegratedCombinedMeasurements>();
 
@@ -193,6 +284,8 @@ using StandardFactor = ImuFactorT<Pim>;
 using NavStateFactor = ImuFactor2T<Pim>;
 using GravityDirectionFactor = ImuFactorWithGravityT<Pim, Unit3>;
 using GravityVectorFactor = ImuFactorWithGravityT<Pim, Point3>;
+using NavStateGravityDirectionFactor = ImuFactor2WithGravityT<Pim, Unit3>;
+using NavStateGravityVectorFactor = ImuFactor2WithGravityT<Pim, Point3>;
 using CombinedFactor = CombinedImuFactorT<CombinedPim>;
 using CombinedGravityDirectionFactor =
     CombinedImuFactorWithGravityT<CombinedPim, Unit3>;
@@ -226,6 +319,17 @@ TEST(LieGroupPreintegration, Serialization) {
   EXPECT(equalsXML(gravityVector));
   EXPECT(equalsBinary(gravityVector));
 
+  const NavStateGravityDirectionFactor navStateGravityDirection(1, 2, 3, 4,
+                                                                pim, 9.81);
+  EXPECT(equalsObj(navStateGravityDirection));
+  EXPECT(equalsXML(navStateGravityDirection));
+  EXPECT(equalsBinary(navStateGravityDirection));
+
+  const NavStateGravityVectorFactor navStateGravityVector(1, 2, 3, 4, pim);
+  EXPECT(equalsObj(navStateGravityVector));
+  EXPECT(equalsXML(navStateGravityVector));
+  EXPECT(equalsBinary(navStateGravityVector));
+
   const CombinedPim combinedPim = getPreintegratedMeasurements<CombinedPim>();
   EXPECT(equalsObj(combinedPim));
   EXPECT(equalsXML(combinedPim));
@@ -250,6 +354,38 @@ TEST(LieGroupPreintegration, Serialization) {
 }
 
 }  // namespace lie_group_serialization
+/* ************************************************************************* */
+
+/* ************************************************************************* */
+namespace galilean_serialization {
+
+// Verifies the Galilean PIM and its public factor round-trip through every
+// supported archive format.
+TEST(GalileanPreintegration, Serialization) {
+  const PreintegratedImuMeasurementsG pim =
+      getPreintegratedMeasurements<PreintegratedImuMeasurementsG>();
+  EXPECT(equalsObj(pim));
+  EXPECT(equalsXML(pim));
+  EXPECT(equalsBinary(pim));
+
+  const GalileanImuFactor factor(1, 2, 3, 4, 5, pim);
+  EXPECT(equalsObj(factor));
+  EXPECT(equalsXML(factor));
+  EXPECT(equalsBinary(factor));
+
+  const PreintegratedCombinedMeasurementsG combinedPim =
+      getPreintegratedMeasurements<PreintegratedCombinedMeasurementsG>();
+  EXPECT(equalsObj(combinedPim));
+  EXPECT(equalsXML(combinedPim));
+  EXPECT(equalsBinary(combinedPim));
+
+  const GalileanCombinedImuFactor combinedFactor(1, 2, 3, 4, 5, 6, combinedPim);
+  EXPECT(equalsObj(combinedFactor));
+  EXPECT(equalsXML(combinedFactor));
+  EXPECT(equalsBinary(combinedFactor));
+}
+
+}  // namespace galilean_serialization
 /* ************************************************************************* */
 
 /* ************************************************************************* */
