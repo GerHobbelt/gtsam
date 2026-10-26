@@ -198,11 +198,16 @@ void ISAM2::recalculateBatch(const ISAM2UpdateParams& updateParams,
   for (const auto& [key, _] : variableIndex_) {
     affectedKeysSet->insert(key);
   }
-  // Removed unused keys:
-  VariableIndex affectedFactorsVarIndex = variableIndex_;
-
-  affectedFactorsVarIndex.removeUnusedVariables(result->unusedKeys.begin(),
-                                                result->unusedKeys.end());
+  // Reuse the index unless removal requires a filtered copy. Batch reorders
+  // without factor removal need no duplicate of the entire variable index.
+  std::optional<VariableIndex> filteredVariableIndex;
+  if (!result->unusedKeys.empty()) {
+    filteredVariableIndex.emplace(variableIndex_);
+    filteredVariableIndex->removeUnusedVariables(result->unusedKeys.begin(),
+                                                  result->unusedKeys.end());
+  }
+  const VariableIndex& affectedFactorsVarIndex =
+      filteredVariableIndex ? *filteredVariableIndex : variableIndex_;
 
   for (const Key key : result->unusedKeys) {
     affectedKeysSet->erase(key);
@@ -393,6 +398,7 @@ void ISAM2::recalculateIncremental(const ISAM2UpdateParams& updateParams,
 void ISAM2::addVariables(const Values& newTheta,
                          ISAM2Result::DetailedResults* detail) {
   gttic(addNewVariables);
+  if (newTheta.empty()) return;
 
   theta_.insert(newTheta);
   if (ISDEBUG("ISAM2 AddVariables")) newTheta.print("The new variables are: ");
@@ -530,12 +536,15 @@ ISAM2Result ISAM2::update(const NonlinearFactorGraph& newFactors,
   if (!result.unusedKeys.empty()) removeVariables(result.unusedKeys);
   result.cliques = this->nodes().size();
 
-  // 10. Track fill-in: record nnz and update baseline after batch reorders.
-  result.treeNnz = treeNnz();
-  // Update baseline on first update or after any batch reorder (adaptive or
-  // the existing 65% affected-variables threshold).
-  if (nnzAfterLastReorder_ == 0 || result.batchReorderTriggered) {
-    nnzAfterLastReorder_ = result.treeNnz;
+  // Counting nonzeros traverses every clique. Keep this global work out of
+  // ordinary incremental updates unless the caller requests it.
+  if (params_.enableAdaptiveReorder || params_.enableDetailedResults) {
+    result.treeNnz = treeNnz();
+    // Update baseline on first update or after any batch reorder (adaptive or
+    // the existing 65% affected-variables threshold).
+    if (nnzAfterLastReorder_ == 0 || result.batchReorderTriggered) {
+      nnzAfterLastReorder_ = result.treeNnz;
+    }
   }
 
   if (params_.evaluateNonlinearError)
@@ -597,10 +606,16 @@ void ISAM2::marginalizeLeaves(
         // Check if parent contains a marginalized leaf variable.  Only need to
         // check the first variable because it is the closest to the leaves.
         sharedClique parent = clique->parent();
-        if (leafKeys.exists(parent->conditional()->front()))
-          clique = parent;
-        else
+        if (!leafKeys.exists(parent->conditional()->front())) break;
+        // Processing the parent only removes (and summarizes) this clique if
+        // it depends on a marginalized variable. Otherwise, e.g. a leaf whose
+        // separator holds only kept variables below a parent that mixes
+        // marginalized and kept frontals, marginalize it here.
+        const auto parents = clique->conditional()->parents();
+        if (std::none_of(parents.begin(), parents.end(),
+                         [&](Key key) { return leafKeys.exists(key); }))
           break;
+        clique = parent;
       }
 
       // See if we should remove the whole clique

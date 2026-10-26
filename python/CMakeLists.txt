@@ -26,6 +26,7 @@ macro(SET_PYTHON_TARGET_PROPERTIES PYTHON_TARGET OUTPUT_NAME OUTPUT_DIRECTORY)
         LIBRARY_OUTPUT_DIRECTORY "${OUTPUT_DIRECTORY}"
         DEBUG_POSTFIX "" # Otherwise you will have a wrong name
         RELWITHDEBINFO_POSTFIX "" # Otherwise you will have a wrong name
+        MINSIZEREL_POSTFIX "" # Otherwise you will have a wrong name
         TIMING_POSTFIX "" # Otherwise you will have a wrong name
         PROFILING_POSTFIX "" # Otherwise you will have a wrong name
     )
@@ -130,6 +131,11 @@ if(GTSAM_USE_MOSEK)
     list(APPEND interface_headers
         ${PROJECT_SOURCE_DIR}/gtsam/certifiable/certifiable_mosek.i
     )
+    # Use pybind11's native STL conversions instead of container proxy classes.
+    list(APPEND ignore
+        "std::vector<double>"
+        "std::map<std::string, double>"
+        "std::map<gtsam::Key, gtsam::DenseIndex>")
 endif()
 
 if(GTSAM_ENABLE_CUDA)
@@ -410,6 +416,30 @@ add_custom_target(${GTSAM_PYTHON_INSTALL_TARGET}
         DEPENDS ${GTSAM_PYTHON_DEPENDENCIES} ${GTSAM_PYTHON_INSTALL_EXTRA}
         WORKING_DIRECTORY ${GTSAM_PYTHON_BUILD_DIRECTORY}
         VERBATIM)
+
+# Package managers (conda-forge, pixi, spack) install into a prefix they own
+# and cannot use the `python-install` target above: outside a virtualenv it
+# passes --user, which installs to the user site instead of the prefix. Opt in
+# to installing the Python package into CMAKE_INSTALL_PREFIX as part of the
+# regular `install` target instead.
+option(GTSAM_PYTHON_INSTALL_INTO_PREFIX
+       "Install the Python package into CMAKE_INSTALL_PREFIX as part of `install`"
+       OFF)
+
+if(GTSAM_PYTHON_INSTALL_INTO_PREFIX)
+  install(CODE "
+    message(STATUS \"Installing the GTSAM Python package into \${CMAKE_INSTALL_PREFIX}\")
+    execute_process(
+      COMMAND \"${PYTHON_EXECUTABLE}\" -m pip install .
+              --no-deps --no-build-isolation --no-compile
+              --prefix \"\${CMAKE_INSTALL_PREFIX}\"
+      WORKING_DIRECTORY \"${GTSAM_PYTHON_BUILD_DIRECTORY}\"
+      RESULT_VARIABLE _gtsam_pip_result)
+    if(NOT _gtsam_pip_result EQUAL 0)
+      message(FATAL_ERROR \"Installing the GTSAM Python package failed\")
+    endif()
+  ")
+endif()
 
 # Custom make command to run all GTSAM Python tests
 add_custom_target(

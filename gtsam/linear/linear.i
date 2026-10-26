@@ -52,6 +52,7 @@ virtual class Base {
   double squaredMahalanobisDistance(const gtsam::Vector& v) const;
   double mahalanobisDistance(const gtsam::Vector& v) const;
   double loss(double squared_distance) const;
+  double loss(const gtsam::Vector& v) const;
   gtsam::Vector unweightedWhiten(const gtsam::Vector& v) const;
   double weight(const gtsam::Vector& v) const;
 };
@@ -559,6 +560,7 @@ virtual class HessianFactor : gtsam::GaussianFactor {
   HessianFactor(gtsam::Key j1, gtsam::Key j2, gtsam::Key j3, gtsam::Matrix G11, gtsam::Matrix G12, gtsam::Matrix G13,
       gtsam::Vector g1, gtsam::Matrix G22, gtsam::Matrix G23, gtsam::Vector g2, gtsam::Matrix G33, gtsam::Vector g3,
       double f);
+  HessianFactor(const gtsam::KeyVector& keys, const gtsam::SymmetricBlockMatrix& augmentedInformation);
   HessianFactor(const gtsam::GaussianFactorGraph& factors);
 
   //Standard Interface

@@ -47,6 +47,22 @@ bool IncrementalFixedLagSmoother::equals(const FixedLagSmoother& rhs,
 FixedLagSmoother::Result IncrementalFixedLagSmoother::update(
     const NonlinearFactorGraph& newFactors, const Values& newTheta,
     const KeyTimestampMap& timestamps, const FactorIndices& factorsToRemove) {
+  return updateImpl(newFactors, newTheta, timestamps, factorsToRemove, KeySet(), KeySet());
+}
+
+/* ************************************************************************* */
+FixedLagSmoother::Result IncrementalFixedLagSmoother::update(
+    const NonlinearFactorGraph& newFactors, const Values& newTheta,
+    const KeyTimestampMap& timestamps, const FactorIndices& factorsToRemove,
+    const KeySet& keysToRetain, const KeySet& keysToRelease) {
+  return updateImpl(newFactors, newTheta, timestamps, factorsToRemove, keysToRetain, keysToRelease);
+}
+
+/* ************************************************************************* */
+FixedLagSmoother::Result IncrementalFixedLagSmoother::updateImpl(
+    const NonlinearFactorGraph& newFactors, const Values& newTheta,
+    const KeyTimestampMap& timestamps, const FactorIndices& factorsToRemove,
+    const KeySet& keysToRetain, const KeySet& keysToRelease) {
 
   const bool debug = ISDEBUG("IncrementalFixedLagSmoother update");
 
@@ -54,6 +70,16 @@ FixedLagSmoother::Result IncrementalFixedLagSmoother::update(
     std::cout << "IncrementalFixedLagSmoother::update() Start" << std::endl;
     PrintSymbolicTree(isam_, "Bayes Tree Before Update:");
     std::cout << "END" << std::endl;
+  }
+
+  // Validate against the graph at update entry, before timestamps or ISAM2
+  // change. New factors cannot make an invalid removal index valid.
+  for (const size_t factorIndex : factorsToRemove) {
+    if (factorIndex >= isam_.getFactorsUnsafe().size()) {
+      throw std::out_of_range(
+          "IncrementalFixedLagSmoother::update: factor index " +
+          std::to_string(factorIndex) + " is outside the factor graph.");
+    }
   }
 
   FastVector<size_t> removedFactors;
@@ -78,8 +104,23 @@ FixedLagSmoother::Result IncrementalFixedLagSmoother::update(
     }
   }
 
+  // Retention names a variable, so it must be one the smoother holds or one
+  // arriving in this update. Validate before any state mutation.
+  for (const Key key : keysToRetain) {
+    if (!isam_.valueExists(key) && !newTheta.exists(key)) {
+      throw std::invalid_argument(
+          "IncrementalFixedLagSmoother::update: cannot retain key '" +
+          DefaultKeyFormatter(key) +
+          "', because no value exists in the smoother or newTheta.");
+    }
+  }
+
   // Update the Timestamps associated with the factor keys
   updateKeyTimestampMap(timestamps);
+
+  // Apply retain/release before computing marginalization candidates so that
+  // releasing takes effect immediately in this same update call
+  updateRetainedKeys(keysToRetain, keysToRelease);
 
   // Get current timestamp
   double current_timestamp = getCurrentTimestamp();
@@ -87,7 +128,8 @@ FixedLagSmoother::Result IncrementalFixedLagSmoother::update(
   if (debug)
     std::cout << "Current Timestamp: " << current_timestamp << std::endl;
 
-  // Find the set of variables to be marginalized out
+  // Find the set of variables to be marginalized out (retained keys are excluded
+  // inside findKeysBefore, so recently released keys are now eligible here)
   KeyVector marginalizableKeys = findKeysBefore(
       current_timestamp - smootherLag_);
 

@@ -6,20 +6,20 @@ endif()
 # Set the version number for the library
 set (GTSAM_VERSION_MAJOR 4)
 set (GTSAM_VERSION_MINOR 3)
-set (GTSAM_VERSION_PATCH 0)
-set (GTSAM_PRERELEASE_VERSION "a2")
+set (GTSAM_VERSION_PATCH 2)
+set (GTSAM_PRERELEASE_VERSION "")
 math (EXPR GTSAM_VERSION_NUMERIC "10000 * ${GTSAM_VERSION_MAJOR} + 100 * ${GTSAM_VERSION_MINOR} + ${GTSAM_VERSION_PATCH}")
 
 # Set the version string for the library. 
 #
 # If the environment variable DEVELOP is set, then the version string will be
-# "MAJOR.MINORprerelease.devTIMESTAMP". TIMESTAMP is another environment variable that should be set to the current
+# "MAJOR.MINOR.PATCHprerelease.devTIMESTAMP". TIMESTAMP is another environment variable that should be set to the current
 # datetime. See build-cibw.yaml for example usage.
 #
 # If the prerelease version is empty, then the version string will be "MAJOR.MINOR.PATCH". Otherwise, the version
 # string will be "MAJOR.MINORprerelease".
 if (DEFINED ENV{DEVELOP})
-    set (GTSAM_VERSION_STRING "${GTSAM_VERSION_MAJOR}.${GTSAM_VERSION_MINOR}${GTSAM_PRERELEASE_VERSION}.dev$ENV{TIMESTAMP}")
+    set (GTSAM_VERSION_STRING "${GTSAM_VERSION_MAJOR}.${GTSAM_VERSION_MINOR}.${GTSAM_VERSION_PATCH}${GTSAM_PRERELEASE_VERSION}.dev$ENV{TIMESTAMP}")
     set (SETUP_NAME "gtsam-develop")
 elseif ("${GTSAM_PRERELEASE_VERSION}" STREQUAL "")
     set (GTSAM_VERSION_STRING "${GTSAM_VERSION_MAJOR}.${GTSAM_VERSION_MINOR}.${GTSAM_VERSION_PATCH}")
@@ -97,11 +97,19 @@ include(GtsamBuildTypes)
 include(GtsamTesting)
 include(GtsamPrinting)
 
+# Detect ROS 2 builds: colcon exports COLCON to its build subprocesses, while
+# ROS binary packages invoke CMake directly with an /opt/ros install prefix.
+if(DEFINED ENV{COLCON} OR CMAKE_INSTALL_PREFIX MATCHES "^/opt/ros/")
+  set(GTSAM_BUILDING_FOR_ROS TRUE)
+else()
+  set(GTSAM_BUILDING_FOR_ROS FALSE)
+endif()
+
 ############### Decide on BOOST ######################################
-# When building inside colcon (ROS 2 build farm or local colcon build),
-# default to no Boost so ROS packages avoid the dependency.
+# When building for ROS 2 (colcon or binary packages), default to no Boost so
+# ROS packages avoid the dependency.
 # Override explicitly with -DGTSAM_USE_BOOST_FEATURES=ON if needed.
-if(DEFINED ENV{COLCON})
+if(GTSAM_BUILDING_FOR_ROS)
   set(_gtsam_boost_default OFF)
 else()
   set(_gtsam_boost_default ON)

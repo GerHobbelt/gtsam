@@ -28,16 +28,20 @@ if(GTSAM_USE_SYSTEM_METIS)
     mark_as_advanced(METIS_INCLUDE_DIR)
     mark_as_advanced(METIS_LIBRARY)
     add_library(metis-gtsam-if INTERFACE)
-    target_include_directories(metis-gtsam-if BEFORE INTERFACE ${METIS_INCLUDE_DIR})
+    # BUILD_INTERFACE: METIS_INCLUDE_DIR is an absolute path on the build
+    # machine, so exporting it bakes that path into the installed
+    # GTSAMConfig. CMake also rejects it outright when the prefix happens to
+    # live inside the source tree (e.g. a conda/pixi env in .pixi/envs).
+    target_include_directories(metis-gtsam-if BEFORE INTERFACE
+      $<BUILD_INTERFACE:${METIS_INCLUDE_DIR}>)
     target_link_libraries(metis-gtsam-if INTERFACE ${GTSAM_METIS_LINK_TARGET})
   endif()
 else()
   # Bundled version:
-  option(GTSAM_BUILD_METIS_EXECUTABLES "Build metis library executables" OFF)
   add_subdirectory(${GTSAM_SOURCE_DIR}/gtsam/3rdparty/metis)
 
   target_include_directories(metis-gtsam BEFORE PUBLIC
-    $<INSTALL_INTERFACE:include/gtsam/3rdparty/metis/>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/gtsam/3rdparty/metis/>
     $<BUILD_INTERFACE:${GTSAM_SOURCE_DIR}/gtsam/3rdparty/metis/include>
   )
 

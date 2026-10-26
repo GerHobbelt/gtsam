@@ -1077,6 +1077,260 @@ TEST(IncrementalFixedLagSmoother, CalculateEstimateForKeys) {
                   ValuesKeyDoesNotExist);
 }
 
+/* ************************************************************************* */
+// Refreshing the timestamp of a variable keeps it in the window while both of
+// its neighbours on the chain are marginalized in the same update.
+TEST(IncrementalFixedLagSmoother, MarginalizeNeighborsOfRetainedKey) {
+  const SharedDiagonal noise = noiseModel::Diagonal::Sigmas(Vector2(0.1, 0.1));
+  IncrementalFixedLagSmoother smoother(5.0);
+
+  NonlinearFactorGraph allFactors;
+  NonlinearFactorGraph factors;
+  Values values;
+  FixedLagSmoother::KeyTimestampMap timestamps;
+  factors.addPrior(X(0), Point2(0.0, 0.0), noise);
+  factors.emplace_shared<BetweenFactor<Point2>>(X(0), X(1), Point2(1.0, 0.2),
+                                                noise);
+  factors.emplace_shared<BetweenFactor<Point2>>(X(1), X(2), Point2(0.9, -0.1),
+                                                noise);
+  for (size_t i = 0; i < 3; ++i) {
+    values.insert(X(i), Point2(double(i), 0.0));
+    timestamps[X(i)] = 0.0;
+  }
+  smoother.update(factors, values, timestamps);
+  allFactors.push_back(factors);
+  Values allValues = values;
+
+  NonlinearFactorGraph newFactors;
+  newFactors.emplace_shared<BetweenFactor<Point2>>(X(2), X(3), Point2(1.1, 0.3),
+                                                   noise);
+  Values newValues;
+  newValues.insert(X(3), Point2(3.0, 0.0));
+  FixedLagSmoother::KeyTimestampMap newTimestamps;
+  newTimestamps[X(3)] = 10.0;
+  newTimestamps[X(1)] = 10.0;
+  smoother.update(newFactors, newValues, newTimestamps);
+  allFactors.push_back(newFactors);
+  allValues.insert(newValues);
+
+  // The problem is linear, so marginalization is exact and the smoother must
+  // agree with solving the full history.
+  const Values expected =
+      allValues.retract(allFactors.linearize(allValues)->optimize());
+  const Values actual = smoother.calculateEstimate();
+  LONGS_EQUAL(2, actual.size());
+  EXPECT(
+      assert_equal(expected.at<Point2>(X(1)), actual.at<Point2>(X(1)), 1e-9));
+  EXPECT(
+      assert_equal(expected.at<Point2>(X(3)), actual.at<Point2>(X(3)), 1e-9));
+  LONGS_EQUAL(2, smoother.timestamps().size());
+}
+
+/* ************************************************************************* */
+namespace removal_validation {
+
+// Invalid removal indices are diagnosed before additions or valid removals land.
+TEST(IncrementalFixedLagSmoother, RejectsInvalidRemovalAtomically) {
+  const auto noise = noiseModel::Unit::Create(1);
+  for (const size_t invalid : {size_t{1}, size_t{100}}) {
+    IncrementalFixedLagSmoother smoother(10.0);
+    NonlinearFactorGraph factors;
+    factors.addPrior(0, 0.0, noise);
+    Values values;
+    values.insert(0, 0.0);
+    smoother.update(factors, values, {{0, 0.0}});
+
+    const Values valuesBefore = smoother.getLinearizationPoint();
+    const NonlinearFactorGraph factorsBefore = smoother.getFactors();
+    const auto timestampsBefore = smoother.timestamps();
+    const ISAM2 isamBefore = smoother.getISAM2();
+    NonlinearFactorGraph newFactors;
+    newFactors.addPrior(1, 1.0, noise);
+    Values newValues;
+    newValues.insert(1, 1.0);
+    bool rejected = false;
+    try {
+      // Index 1 would exist after insertion, but does not exist at update entry.
+      smoother.update(newFactors, newValues, {{0, 0.5}, {1, 0.5}}, {0, invalid});
+    } catch (const std::out_of_range& error) {
+      rejected = std::string(error.what()) ==
+          "IncrementalFixedLagSmoother::update: factor index " +
+          std::to_string(invalid) + " is outside the factor graph.";
+    } catch (const std::exception&) {
+      // A later solver exception does not provide the admission guarantee.
+    }
+    EXPECT(rejected);
+    EXPECT(assert_equal(valuesBefore, smoother.getLinearizationPoint(), 1e-12));
+    EXPECT(assert_equal(factorsBefore, smoother.getFactors(), 1e-12));
+    EXPECT(timestampsBefore == smoother.timestamps());
+    EXPECT(isamBefore.equals(smoother.getISAM2(), 1e-12));
+    if (!rejected) continue;
+
+    smoother.update(newFactors, newValues, {{0, 0.5}, {1, 0.5}}, {0});
+    EXPECT(!smoother.getLinearizationPoint().exists(0));
+    EXPECT(assert_equal(1.0, smoother.calculateEstimate<double>(1)));
+
+    // In-range empty slots remain accepted when no new factor reuses the slot.
+    smoother.update(NonlinearFactorGraph(), Values(), {}, {0});
+    EXPECT(assert_equal(1.0, smoother.calculateEstimate<double>(1)));
+  }
+}
+
+// When both inputs are invalid, removal validation runs before timestamp checks.
+TEST(IncrementalFixedLagSmoother, ValidatesRemovalsBeforeTimestamps) {
+  IncrementalFixedLagSmoother smoother(1.0);
+  bool rejected = false;
+  try {
+    smoother.update(NonlinearFactorGraph(), Values(), {{0, 1000.0}}, {0});
+  } catch (const std::out_of_range& error) {
+    rejected = std::string(error.what()) ==
+        "IncrementalFixedLagSmoother::update: factor index 0 is outside the factor graph.";
+  } catch (const std::exception&) {
+  }
+  EXPECT(rejected);
+  EXPECT(smoother.timestamps().empty());
+  EXPECT(smoother.getLinearizationPoint().empty());
+}
+
+}  // namespace removal_validation
+/* ************************************************************************* */
+
+/* ************************************************************************* */
+namespace retention {
+
+using Timestamps = IncrementalFixedLagSmoother::KeyTimestampMap;
+const SharedDiagonal kNoise = noiseModel::Isotropic::Sigma(2, 0.1);
+
+// A retained key survives far outside the lag window across later four-argument
+// updates, and is marginalized in the same update that releases it.
+TEST(IncrementalFixedLagSmoother, RetainAndRelease) {
+  IncrementalFixedLagSmoother smoother(10.0, ISAM2Params());
+
+  NonlinearFactorGraph factors;
+  factors.addPrior(X(0), Point2(0, 0), kNoise);
+  Values values;
+  values.insert(X(0), Point2(0, 0));
+  smoother.update(factors, values, {{X(0), 0.0}});
+
+  // Add X(1) at t=2 and retain it.
+  factors = NonlinearFactorGraph();
+  factors.emplace_shared<BetweenFactor<Point2>>(X(0), X(1), Point2(1, 0), kNoise);
+  values = Values();
+  values.insert(X(1), Point2(1, 0));
+  smoother.update(factors, values, {{X(1), 2.0}}, FactorIndices(),
+                  KeySet{X(1)});
+  EXPECT(smoother.retainedKeys().exists(X(1)));
+
+  // Advance to t=50 one state at a time, far past the lag for X(1).
+  for (size_t i = 2; i <= 25; ++i) {
+    factors = NonlinearFactorGraph();
+    factors.emplace_shared<BetweenFactor<Point2>>(X(i - 1), X(i), Point2(1, 0),
+                                                  kNoise);
+    values = Values();
+    values.insert(X(i), Point2(double(i), 0));
+    smoother.update(factors, values, {{X(i), 2.0 * i}});
+  }
+
+  EXPECT(smoother.retainedKeys().exists(X(1)));
+  EXPECT(smoother.timestamps().count(X(1)) == 1);
+  EXPECT(!smoother.getLinearizationPoint().exists(X(0)));
+  EXPECT(assert_equal(Point2(1, 0), smoother.calculateEstimate<Point2>(X(1)),
+                      1e-2));
+
+  // Releasing X(1), whose timestamp is outside the lag, marginalizes it now.
+  smoother.update(NonlinearFactorGraph(), Values(), Timestamps(),
+                  FactorIndices(), KeySet(), KeySet{X(1)});
+  EXPECT(smoother.retainedKeys().empty());
+  EXPECT(smoother.timestamps().count(X(1)) == 0);
+  EXPECT(!smoother.getLinearizationPoint().exists(X(1)));
+}
+
+// Retaining a key that is neither in the smoother nor in newTheta throws, and
+// the rejected update leaves the smoother unchanged.
+TEST(IncrementalFixedLagSmoother, RejectsRetainingUnknownKey) {
+  IncrementalFixedLagSmoother smoother(1.0, ISAM2Params());
+
+  NonlinearFactorGraph factors;
+  factors.addPrior(X(0), Point2(0, 0), kNoise);
+  Values values;
+  values.insert(X(0), Point2(0, 0));
+  smoother.update(factors, values, {{X(0), 0.0}});
+
+  factors = NonlinearFactorGraph();
+  factors.emplace_shared<BetweenFactor<Point2>>(X(0), X(2), Point2(1, 0), kNoise);
+  values = Values();
+  values.insert(X(2), Point2(1, 0));
+  CHECK_EXCEPTION((smoother.update(factors, values, {{X(2), 5.0}},
+                                   FactorIndices(), KeySet{X(1)})),
+                  std::invalid_argument);
+  EXPECT(smoother.retainedKeys().empty());
+  EXPECT(smoother.timestamps().count(X(2)) == 0);
+  EXPECT(!smoother.getLinearizationPoint().exists(X(2)));
+
+  // A key the smoother already holds can be retained without new values.
+  smoother.update(NonlinearFactorGraph(), Values(), Timestamps(),
+                  FactorIndices(), KeySet{X(0)});
+  EXPECT(smoother.retainedKeys().exists(X(0)));
+}
+
+// Retaining X(1) while both of its neighbors, X(0) and X(2), expire in the same
+// update marginalizes both neighbors and keeps the full-history solution for
+// X(1) and X(3). Releasing X(1) later marginalizes it immediately, because its
+// timestamp is already outside the lag. This is the scenario of
+// borglab/gtsam#2825.
+TEST(IncrementalFixedLagSmoother, RetainKeyWhileBothNeighborsExpire) {
+  IncrementalFixedLagSmoother smoother(5.0, ISAM2Params());
+  NonlinearFactorGraph fullGraph;
+  Values fullValues;
+
+  // Prior on X(0) and the chain X(0)-X(1)-X(2), all at t=0, retaining X(1).
+  NonlinearFactorGraph factors;
+  factors.addPrior(X(0), Point2(0.0, 0.0), kNoise);
+  factors.emplace_shared<BetweenFactor<Point2>>(X(0), X(1), Point2(1.0, 0.0),
+                                                kNoise);
+  factors.emplace_shared<BetweenFactor<Point2>>(X(1), X(2), Point2(1.0, 0.5),
+                                                kNoise);
+  Values values;
+  values.insert(X(0), Point2(0.1, -0.1));
+  values.insert(X(1), Point2(1.1, 0.1));
+  values.insert(X(2), Point2(1.9, 0.6));
+  fullGraph.push_back(factors);
+  fullValues.insert(values);
+  smoother.update(factors, values, {{X(0), 0.0}, {X(1), 0.0}, {X(2), 0.0}},
+                  FactorIndices(), KeySet{X(1)});
+
+  // X(3) at t=10 expires X(0) and X(2) together, leaving X(1) at t=0.
+  factors = NonlinearFactorGraph();
+  factors.emplace_shared<BetweenFactor<Point2>>(X(2), X(3), Point2(1.0, -0.5),
+                                                kNoise);
+  values = Values();
+  values.insert(X(3), Point2(3.1, 0.1));
+  fullGraph.push_back(factors);
+  fullValues.insert(values);
+  smoother.update(factors, values, {{X(3), 10.0}});
+
+  for (const Key expired : {X(0), X(2)}) {
+    EXPECT(!smoother.getLinearizationPoint().exists(expired));
+    EXPECT(smoother.timestamps().count(expired) == 0);
+  }
+  EXPECT(smoother.retainedKeys().exists(X(1)));
+  EXPECT_DOUBLES_EQUAL(0.0, smoother.timestamps().at(X(1)), 1e-9);
+  EXPECT(check_smoother(fullGraph, fullValues, smoother, X(1)));
+  EXPECT(check_smoother(fullGraph, fullValues, smoother, X(3)));
+
+  // Releasing X(1) marginalizes it in this update.
+  smoother.update(NonlinearFactorGraph(), Values(), Timestamps(),
+                  FactorIndices(), KeySet(), KeySet{X(1)});
+  EXPECT(smoother.retainedKeys().empty());
+  EXPECT(!smoother.getLinearizationPoint().exists(X(1)));
+  EXPECT(smoother.timestamps().count(X(1)) == 0);
+  EXPECT(smoother.timestamps().count(X(3)) == 1);
+  EXPECT(check_smoother(fullGraph, fullValues, smoother, X(3)));
+}
+
+}  // namespace retention
+/* ************************************************************************* */
+
 int main() {
   TestResult tr;
   return TestRegistry::runAllTests(tr);
