@@ -52,7 +52,7 @@ jobs:
 
       - name: Check modified files
         id: filter
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         with:
           filters: |
             relevant_changes:
@@ -115,15 +115,19 @@ jobs:
           toolset: 14.40
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.17.0"
 
+      # Keep the Windows PR fast-compile gate focused on the stable library.
       - name: Configure
         shell: bash
         run: >-
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DGTSAM_BUILD_TESTS=OFF
-          -DGTSAM_BUILD_UNSTABLE=ON
+          -DGTSAM_SLOW_BUT_CORRECT_BETWEENFACTOR=ON
+          -DGTSAM_BUILD_UNSTABLE=${{ runner.os == 'Windows' && 'OFF' || 'ON' }}
           -DGTSAM_USE_QUATERNIONS=OFF
           -DGTSAM_WITH_TBB=OFF
           -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF
@@ -139,7 +143,12 @@ jobs:
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Compile GTSAM libraries
+        if: runner.os != 'Windows'
         run: cmake --build build --target gtsam gtsam_unstable --parallel 4
+
+      - name: Compile GTSAM library (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --build build --target gtsam --parallel 4
 
       - name: Show sccache statistics
         shell: bash
@@ -243,7 +252,7 @@ jobs:
         run: cl
 
       - name: Setup python (Windows)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         if: runner.os == 'Windows'
         with:
           python-version: ${{ matrix.python_version }}
@@ -314,7 +323,9 @@ jobs:
     
       - name: Install sccache
         if: matrix.use_sccache == true
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.17.0"
 
       - name: Set GTSAM_WITH_TBB Flag
         if: matrix.flag == 'tbb'
@@ -372,7 +383,7 @@ jobs:
       - name: Test C++
         if: matrix.cpp_tests == true
         shell: bash
-        run: cmake --build build --target check --parallel 2
+        run: cmake --build build --target check --parallel 4
 
       - name: Show sccache statistics
         if: matrix.use_sccache == true

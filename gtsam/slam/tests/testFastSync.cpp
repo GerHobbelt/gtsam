@@ -24,6 +24,7 @@
 #include <gtsam/nonlinear/PriorFactor.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/FastSync.h>
+#include <gtsam/slam/FrobeniusFactor.h>
 
 #include <Eigen/QR>
 #include <cmath>
@@ -75,6 +76,29 @@ TEST(FastSync, Rot3Noiseless) {
                        Rot3::Expmap(Vector3{0.2, 0.25, -0.1})));
 }
 
+// Verifies Frobenius between/prior factors produce the same aligned Rot3
+// initialization as their tangent-residual counterparts.
+TEST(FastSync, FrobeniusRot3Factors) {
+  const Rot3 value0 = Rot3::Expmap(Vector3{0.1, -0.2, 0.05});
+  const Rot3 value1 = Rot3::Expmap(Vector3{-0.3, 0.1, 0.2});
+  const Rot3 value2 = Rot3::Expmap(Vector3{0.2, 0.25, -0.1});
+  const auto model = noiseModel::Isotropic::Sigma(Rot3::dimension, 0.1);
+
+  NonlinearFactorGraph graph;
+  graph.emplace_shared<FrobeniusBetweenFactor<Rot3>>(
+      k0, k1, value0.between(value1), model);
+  graph.emplace_shared<FrobeniusBetweenFactor<Rot3>>(
+      k1, k2, value1.between(value2), model);
+  graph.emplace_shared<FrobeniusBetweenFactor<Rot3>>(
+      k2, k0, value2.between(value0), model);
+  graph.emplace_shared<FrobeniusPrior<Rot3>>(k0, value0.matrix(), model);
+
+  const Values actual = fastSync<Rot3>(graph);
+  EXPECT(assert_equal(value0, actual.at<Rot3>(k0), 1e-7));
+  EXPECT(assert_equal(value1, actual.at<Rot3>(k1), 1e-7));
+  EXPECT(assert_equal(value2, actual.at<Rot3>(k2), 1e-7));
+}
+
 // Verifies exact synchronization and prior alignment for Pose2.
 TEST(FastSync, Pose2Noiseless) {
   EXPECT(checkTriangle(Pose2(1.0, -2.0, 0.2), Pose2(2.0, 0.5, 0.7),
@@ -113,6 +137,29 @@ TEST(FastSync, SL4Noiseless) {
   EXPECT(checkTriangle(SL4::Expmap(Vector::LinSpaced(15, 0.001, 0.015)),
                        SL4::Expmap(Vector::LinSpaced(15, -0.01, 0.02)),
                        SL4::Expmap(Vector::LinSpaced(15, 0.02, -0.01)), 1e-6));
+}
+
+// Verifies the class and convenience APIs accept generated and custom
+// orderings.
+TEST(FastSync, OrderingSelection) {
+  const Rot2 value0 = Rot2::fromAngle(0.2);
+  const Rot2 value1 = Rot2::fromAngle(0.7);
+  const Rot2 value2 = Rot2::fromAngle(-0.4);
+  const NonlinearFactorGraph graph = triangleGraph(value0, value1, value2);
+
+  const FastSync<Rot2> solver(graph);
+  const Values relaxed = solver.solve(Ordering::COLAMD);
+  const Values classResult = solver.projectAndAlign(relaxed);
+  const Values functionResult = fastSync<Rot2>(graph, Ordering::COLAMD);
+  const Ordering customOrdering{k2, k0, k1};
+  const Values customResult = fastSync<Rot2>(graph, customOrdering);
+
+  for (const auto& [key, expected] :
+       std::map<Key, Rot2>{{k0, value0}, {k1, value1}, {k2, value2}}) {
+    EXPECT(assert_equal(expected, classResult.at<Rot2>(key), 1e-7));
+    EXPECT(assert_equal(expected, functionResult.at<Rot2>(key), 1e-7));
+    EXPECT(assert_equal(expected, customResult.at<Rot2>(key), 1e-7));
+  }
 }
 
 }  // namespace noiseless_fixture
@@ -263,6 +310,18 @@ TEST(FastSync, BuiltInProjections) {
 /* ************************************************************************* */
 namespace validation_fixture {
 
+// Verifies custom orderings must cover every graph key exactly once.
+TEST(FastSync, InvalidCustomOrdering) {
+  NonlinearFactorGraph graph;
+  const auto model = noiseModel::Unit::Create(1);
+  graph.emplace_shared<BetweenFactor<Rot2>>(0, 1, Rot2(), model);
+  const FastSync<Rot2> solver(graph);
+
+  CHECK_EXCEPTION(solver.solve(Ordering{0}), std::invalid_argument);
+  CHECK_EXCEPTION(solver.solve(Ordering{0, 0}), std::invalid_argument);
+  CHECK_EXCEPTION(solver.solve(Ordering{0, 2}), std::invalid_argument);
+}
+
 // Verifies empty graphs fail early and disconnected graphs fail in elimination.
 TEST(FastSync, InvalidGraphStructure) {
   CHECK_EXCEPTION(fastSync<Rot2>(NonlinearFactorGraph()),
@@ -276,7 +335,7 @@ TEST(FastSync, InvalidGraphStructure) {
   try {
     solver.solve();
     CHECK(false);
-  } catch (const IndeterminantLinearSystemException&) {
+  } catch (const IndeterminateSystemException&) {
     // The nearby variable is ordering-dependent, but the failure occurs in
     // the linear solve after the constructor accepts both components.
   } catch (...) {

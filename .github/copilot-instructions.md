@@ -92,6 +92,40 @@ Matrix23 matrix{{1.0, 2.0, 3.0},
 * Documentation-only changes do not require unrelated C++ tests, but should
   still pass applicable documentation checks and `git diff --check`.
 
+## Debugging indeterminate linear systems
+
+* Use the correctly spelled `IndeterminateSystemException`. The former
+  `IndeterminantLinearSystemException` name is available only through the
+  GTSAM 4.3 deprecation machinery.
+* Treat `nearbyVariable()` as the key where elimination detected the problem,
+  not necessarily its source; the reported key depends on graph structure and
+  elimination ordering.
+* Remember that the exception also protects against nearly indeterminate
+  systems. A mathematically full-rank graph can trigger it when elimination
+  produces a Cholesky pivot that is very small relative to its original
+  diagonal entry. This test is invariant to diagonal changes of variable units
+  but still depends on elimination ordering. For example, a very strong finite
+  prior combined with much looser measurement noise can expose a weakly
+  observed direction, although the raw weight ratio alone may only reflect
+  different variable units and is not sufficient evidence.
+* Preserve the failing nonlinear graph, values, and ordering. Linearize at
+  those values, request the Jacobian with an explicit ordering, and inspect its
+  singular spectrum and null space. Prefer Jacobian rank analysis over a
+  determinant or Hessian rank analysis because forming the Hessian squares the
+  condition number.
+* Check for missing gauge constraints, unused or accidental keys, disconnected
+  components, degenerate geometry or motion, lost observability after
+  marginalization, inconsistent units or noise scales, and negative curvature
+  introduced by custom Hessian factors.
+* Use a temporary, physically meaningful prior to test an observability
+  hypothesis, then recompute rank. If the intended prior fixes a gauge exactly,
+  prefer a hard constraint such as `noiseModel::Constrained::All(dimension)`;
+  it expresses that intent without choosing an arbitrary extreme finite weight.
+  Do not present damping or a dense solve as a fix unless the model itself
+  becomes observable and well conditioned.
+* See `gtsam/linear/doc/IndeterminateSystemException.ipynb` for a runnable
+  Python example and a full diagnostic checklist.
+
 ## C++ test organization
 
 * Avoid one large anonymous namespace collecting every helper at the top of a

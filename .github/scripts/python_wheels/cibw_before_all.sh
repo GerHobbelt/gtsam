@@ -12,8 +12,8 @@ BOOST_BUILD_JOBS=2
 GTSAM_BUILD_JOBS=2
 
 # The generated Python wrapper translation units require substantial memory.
-# Compile them serially on Linux ARM runners to avoid the OOM killer.
-if [ "$(uname)" == "Linux" ] && [ "$(uname -m)" == "aarch64" ]; then
+# Compile them serially in Linux wheel containers to avoid the OOM killer.
+if [ "$(uname)" == "Linux" ]; then
     GTSAM_BUILD_JOBS=1
 fi
 
@@ -93,6 +93,7 @@ cmake $PROJECT_DIR \
     -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} \
     -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
     -DGTSAM_BUILD_TESTS=OFF \
+    -DGTSAM_SLOW_BUT_CORRECT_BETWEENFACTOR=ON \
     -DGTSAM_BUILD_UNSTABLE=${GTSAM_BUILD_UNSTABLE:-ON} \
     -DGTSAM_USE_QUATERNIONS=OFF \
     -DGTSAM_WITH_TBB=${GTSAM_WITH_TBB:-OFF} \

@@ -21,6 +21,7 @@
 #include <gtsam/linear/GaussianFactorGraph.h>
 #include <gtsam/linear/JacobianFactor.h>
 #include <gtsam/linear/NoiseModel.h>
+#include <gtsam/slam/FrobeniusFactor.h>
 
 #include <cmath>
 #include <stdexcept>
@@ -40,32 +41,51 @@ double FastSync<T>::isotropicSigma(const SharedNoiseModel& model) {
 
 template <class T>
 FastSync<T>::FastSync(const NonlinearFactorGraph& graph) {
+  const auto addMeasurement = [this](Key key1, Key key2,
+                                     const T& measurement,
+                                     const SharedNoiseModel& model,
+                                     size_t expectedNoiseDimension) {
+    if (model->dim() != expectedNoiseDimension) {
+      throw std::invalid_argument(
+          "fastSync noise dimension does not match the factor residual");
+    }
+    const double sigma = isotropicSigma(model);
+    if (!std::isfinite(sigma) || sigma <= 0.0) {
+      throw std::invalid_argument(
+          "FastSync requires finite, positive measurement sigmas");
+    }
+    const MatrixN firstBlock = -measurement.matrix().transpose();
+    // Whitening by sigma gives the paper's precision kappa = 1 / sigma^2.
+    reducedGraph_.emplace_shared<JacobianFactor>(
+        key1, firstBlock, key2, MatrixN::Identity(), VectorN::Zero(),
+        noiseModel::Isotropic::Sigma(N, sigma));
+  };
+  const auto addPrior = [this](Key key, const T& value) {
+    if (++priorCount_ > 1) {
+      throw std::invalid_argument(
+          "fastSync supports at most one matching prior");
+    }
+    priorKey_ = key;
+    priorValue_ = value;
+  };
+
   for (const auto& factor : graph) {
     if (const auto between =
             std::dynamic_pointer_cast<BetweenFactor<T>>(factor)) {
-      if (between->noiseModel()->dim() != T::dimension) {
-        throw std::invalid_argument(
-            "fastSync noise dimension must match the group dimension");
-      }
-      const double sigma = isotropicSigma(between->noiseModel());
-      if (!std::isfinite(sigma) || sigma <= 0.0) {
-        throw std::invalid_argument(
-            "FastSync requires finite, positive measurement sigmas");
-      }
-      const Key k1 = between->key1(), k2 = between->key2();
-      const MatrixN firstBlock = -between->measured().matrix().transpose();
-      // Whitening by sigma gives the paper's precision kappa = 1 / sigma^2.
-      reducedGraph_.emplace_shared<JacobianFactor>(
-          k1, firstBlock, k2, MatrixN::Identity(), VectorN::Zero(),
-          noiseModel::Isotropic::Sigma(N, sigma));
+      addMeasurement(between->key1(), between->key2(), between->measured(),
+                     between->noiseModel(), T::dimension);
+    } else if (const auto between =
+                   std::dynamic_pointer_cast<FrobeniusBetweenFactor<T>>(
+                       factor)) {
+      addMeasurement(between->key1(), between->key2(), between->measured(),
+                     between->noiseModel(), N * N);
     } else if (const auto prior =
                    std::dynamic_pointer_cast<PriorFactor<T>>(factor)) {
-      if (++priorCount_ > 1) {
-        throw std::invalid_argument(
-            "fastSync supports at most one matching prior");
-      }
-      priorKey_ = prior->key();
-      priorValue_ = prior->prior();
+      addPrior(prior->key(), prior->prior());
+    } else if (const auto prior =
+                   std::dynamic_pointer_cast<FrobeniusPrior<T>>(factor)) {
+      addPrior(prior->key(),
+               FastSyncProjection<T>::project(prior->priorMatrix()));
     }
   }
   if (reducedGraph_.empty()) {
@@ -107,22 +127,36 @@ void FastSync<T>::backSubstituteConditional(
 }
 
 template <class T>
-Values FastSync<T>::solve() const {
+Values FastSync<T>::solve(Ordering::OrderingType orderingType) const {
+  return solveOrdered(Ordering::Create(orderingType, reducedGraph_));
+}
+
+template <class T>
+Values FastSync<T>::solve(const Ordering& ordering) const {
+  const KeySet graphKeys = reducedGraph_.keys();
+  const KeySet orderingKeys(ordering);
+  if (ordering.size() != graphKeys.size() || orderingKeys != graphKeys) {
+    throw std::invalid_argument(
+        "FastSync ordering must contain every measurement graph key exactly "
+        "once");
+  }
+  return solveOrdered(ordering);
+}
+
+template <class T>
+Values FastSync<T>::solveOrdered(const Ordering& ordering) const {
   const MatrixN identity = MatrixN::Identity();
   const VectorN zero = VectorN::Zero();
 
   GaussianFactorGraph graph = reducedGraph_;
-  const Ordering ordering = Ordering::Metis(graph);
-  if (ordering.empty()) {
-    throw std::runtime_error("FastSync METIS ordering failed");
-  }
   const Key gaugeKey = ordering.back();
   graph.emplace_shared<JacobianFactor>(gaugeKey, identity, zero,
                                        noiseModel::Unit::Create(N));
 
-  const auto bayesNet = graph.eliminateSequential(ordering, EliminateQR);
+  const auto bayesNet =
+      graph.eliminateSequential(ordering, EliminatePreferCholesky);
   if (!bayesNet || bayesNet->size() != ordering.size()) {
-    throw std::runtime_error("FastSync sequential QR elimination failed");
+    throw std::runtime_error("FastSync sequential Cholesky elimination failed");
   }
 
   Values solution;
@@ -167,10 +201,20 @@ Values FastSync<T>::projectAndAlign(const Values& relaxed) const {
 
 /* ************************************************************************* */
 template <class T>
-Values fastSync(const NonlinearFactorGraph& graph) {
+Values fastSync(const NonlinearFactorGraph& graph,
+                Ordering::OrderingType orderingType) {
   GTSAM_CONCEPT_ASSERT(IsMatrixLieGroup<T>);
   const FastSync<T> solver(graph);
-  const Values relaxed = solver.solve();
+  const Values relaxed = solver.solve(orderingType);
+  return solver.projectAndAlign(relaxed);
+}
+
+/* ************************************************************************* */
+template <class T>
+Values fastSync(const NonlinearFactorGraph& graph, const Ordering& ordering) {
+  GTSAM_CONCEPT_ASSERT(IsMatrixLieGroup<T>);
+  const FastSync<T> solver(graph);
+  const Values relaxed = solver.solve(ordering);
   return solver.projectAndAlign(relaxed);
 }
 
