@@ -20,16 +20,18 @@
 
 // #define ENABLE_TIMING // uncomment for timing results
 
+#include <CppUnitLite/TestHarness.h>
+#include <gtsam/base/MatrixConstants.h>
+#include <gtsam/base/TestableAssertions.h>
+#include <gtsam/base/VectorConstants.h>
+#include <gtsam/base/numericalDerivative.h>
+#include <gtsam/geometry/Pose3.h>
+#include <gtsam/linear/Sampler.h>
 #include <gtsam/navigation/ImuFactor.h>
 #include <gtsam/navigation/ScenarioRunner.h>
-#include <gtsam/geometry/Pose3.h>
 #include <gtsam/nonlinear/Values.h>
 #include <gtsam/nonlinear/factorTesting.h>
-#include <gtsam/linear/Sampler.h>
-#include <gtsam/base/TestableAssertions.h>
-#include <gtsam/base/numericalDerivative.h>
 
-#include <CppUnitLite/TestHarness.h>
 #include <list>
 
 #include "imuFactorTesting.h"
@@ -121,8 +123,7 @@ TEST_PIM(ImuFactor, PreintegratedMeasurements) {
   Matrix9 aH1, aH2;
   Matrix96 aH3;
   actual.computeError(x1, x2, bias, aH1, aH2, aH3);
-  std::function<Vector9(const NavState&, const NavState&, const Bias&)> f =
-      std::bind(&PreintegrationBase::computeError, actual,
+  auto f = std::bind(&PreintegrationBase::computeError, actual,
                   std::placeholders::_1, std::placeholders::_2, std::placeholders::_3,
                   nullptr, nullptr, nullptr);
   EXPECT(assert_equal(numericalDerivative31(f, x1, x2, bias), aH1, 1e-9));
@@ -227,8 +228,7 @@ TEST_PIM(ImuFactor, ErrorAndJacobians) {
   ImuFactorT<PIM> factor(X(1), V(1), X(2), V(2), B(1), pim);
 
   // Expected error
-  Vector expectedError(9);
-  expectedError << 0, 0, 0, 0, 0, 0, 0, 0, 0;
+  Vector expectedError{{0, 0, 0, 0, 0, 0, 0, 0, 0}};
   EXPECT(
       assert_equal(expectedError,
           factor.evaluateError(x1, v1, x2, v2, kZeroBias)));
@@ -295,8 +295,7 @@ TEST_PIM(ImuFactor, ErrorAndJacobianWithBiases) {
       Point3(5.5, 1.0, -50.0));
 
   // Measurements
-  Vector3 measuredOmega;
-  measuredOmega << 0, 0, M_PI / 10.0 + 0.3;
+  Vector3 measuredOmega{0, 0, M_PI / 10.0 + 0.3};
   Vector3 measuredAcc = x1.rotation().unrotate(-kGravityAlongNavZDown)
       + Vector3(0.2, 0.0, 0.0);
   double deltaT = 1.0;
@@ -341,8 +340,7 @@ TEST_PIM(ImuFactor, ErrorAndJacobianWith2ndOrderCoriolis) {
       Point3(5.5, 1.0, -50.0));
 
   // Measurements
-  Vector3 measuredOmega;
-  measuredOmega << 0, 0, M_PI / 10.0 + 0.3;
+  Vector3 measuredOmega{0, 0, M_PI / 10.0 + 0.3};
   Vector3 measuredAcc = x1.rotation().unrotate(-kGravityAlongNavZDown)
       + Vector3(0.2, 0.0, 0.0);
   double deltaT = 1.0;
@@ -429,8 +427,7 @@ TEST(ImuFactor, fistOrderExponential) {
 
   // change w.r.t. linearization point
   double alpha = 0.0;
-  Vector3 deltaBiasOmega;
-  deltaBiasOmega << alpha, alpha, alpha;
+  Vector3 deltaBiasOmega{alpha, alpha, alpha};
 
   const Matrix3 Jr = Rot3::ExpmapDerivative(
       (measuredOmega - biasOmega) * deltaT);
@@ -531,10 +528,8 @@ TEST_PIM(ImuFactor, PredictPositionAndVelocity) {
   Bias bias(Vector3(0, 0, 0), Vector3(0, 0, 0)); // Biases (acc, rot)
 
   // Measurements
-  Vector3 measuredOmega;
-  measuredOmega << 0, 0, 0; // M_PI/10.0+0.3;
-  Vector3 measuredAcc;
-  measuredAcc << 0, 1, -kGravity;
+  Vector3 measuredOmega{0, 0, 0};  // M_PI/10.0+0.3;
+  Vector3 measuredAcc{0, 1, -kGravity};
   double deltaT = 0.001;
 
   PIM pim(testing::Params(), Bias(Vector3(0.2, 0.0, 0.0), Vector3(0.0, 0.0, 0.0)));
@@ -559,10 +554,8 @@ TEST_PIM(ImuFactor, PredictRotation) {
   Bias bias(Vector3(0, 0, 0), Vector3(0, 0, 0)); // Biases (acc, rot)
 
   // Measurements
-  Vector3 measuredOmega;
-  measuredOmega << 0, 0, M_PI / 10; // M_PI/10.0+0.3;
-  Vector3 measuredAcc;
-  measuredAcc << 0, 0, -kGravity;
+  Vector3 measuredOmega{0, 0, M_PI / 10};  // M_PI/10.0+0.3;
+  Vector3 measuredAcc{0, 0, -kGravity};
   double deltaT = 0.001;
 
   PIM pim(testing::Params(),
@@ -703,11 +696,9 @@ TEST_PIM(ImuFactor, bodyPSensorWithBias) {
   double deltaT = 0.005;
 
   //   Specify noise values on priors
-  Vector6 priorNoisePoseSigmas(
-      (Vector(6) << 0.001, 0.001, 0.001, 0.01, 0.01, 0.01).finished());
-  Vector3 priorNoiseVelSigmas((Vector(3) << 0.1, 0.1, 0.1).finished());
-  Vector6 priorNoiseBiasSigmas(
-      (Vector(6) << 0.1, 0.1, 0.1, 0.5e-1, 0.5e-1, 0.5e-1).finished());
+  Vector6 priorNoisePoseSigmas(Vector{{0.001, 0.001, 0.001, 0.01, 0.01, 0.01}});
+  Vector3 priorNoiseVelSigmas(Vector{{0.1, 0.1, 0.1}});
+  Vector6 priorNoiseBiasSigmas(Vector{{0.1, 0.1, 0.1, 0.5e-1, 0.5e-1, 0.5e-1}});
   SharedDiagonal priorNoisePose = Diagonal::Sigmas(priorNoisePoseSigmas);
   SharedDiagonal priorNoiseVel = Diagonal::Sigmas(priorNoiseVelSigmas);
   SharedDiagonal priorNoiseBias = Diagonal::Sigmas(priorNoiseBiasSigmas);
@@ -864,16 +855,15 @@ TEST_PIM(ImuFactor, CheckCovariance) {
 
   PIM actual(testing::Params());
   actual.integrateMeasurement(measuredAcc, measuredOmega, deltaT);
-  Matrix9 expected;
-  expected << 1.0577e-08, 0, 0, 0, 0, 0, 0, 0, 0,     //
-      0, 1.0577e-08, 0, 0, 0, 0, 0, 0, 0,             //
-      0, 0, 1.0577e-08, 0, 0, 0, 0, 0, 0,             //
-      0, 0, 0, 5.00868e-05, 0, 0, 3.47222e-07, 0, 0,  //
-      0, 0, 0, 0, 5.00868e-05, 0, 0, 3.47222e-07, 0,  //
-      0, 0, 0, 0, 0, 5.00868e-05, 0, 0, 3.47222e-07,  //
-      0, 0, 0, 3.47222e-07, 0, 0, 1.38889e-06, 0, 0,  //
-      0, 0, 0, 0, 3.47222e-07, 0, 0, 1.38889e-06, 0,  //
-      0, 0, 0, 0, 0, 3.47222e-07, 0, 0, 1.38889e-06;
+  Matrix9 expected{{1.0577e-08, 0, 0, 0, 0, 0, 0, 0, 0},
+                   {0, 1.0577e-08, 0, 0, 0, 0, 0, 0, 0},
+                   {0, 0, 1.0577e-08, 0, 0, 0, 0, 0, 0},
+                   {0, 0, 0, 5.00868e-05, 0, 0, 3.47222e-07, 0, 0},
+                   {0, 0, 0, 0, 5.00868e-05, 0, 0, 3.47222e-07, 0},
+                   {0, 0, 0, 0, 0, 5.00868e-05, 0, 0, 3.47222e-07},
+                   {0, 0, 0, 3.47222e-07, 0, 0, 1.38889e-06, 0, 0},
+                   {0, 0, 0, 0, 3.47222e-07, 0, 0, 1.38889e-06, 0},
+                   {0, 0, 0, 0, 0, 3.47222e-07, 0, 0, 1.38889e-06}};
   EXPECT(assert_equal(expected, actual.preintMeasCov()));
 }
 

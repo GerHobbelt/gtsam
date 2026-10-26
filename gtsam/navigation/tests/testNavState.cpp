@@ -16,14 +16,15 @@
  * @date    July 2015
  */
 
-#include <gtsam/navigation/NavState.h>
-
+#include <CppUnitLite/TestHarness.h>
+#include <gtsam/base/MatrixConstants.h>
+#include <gtsam/base/TestableAssertions.h>
+#include <gtsam/base/VectorConstants.h>
 #include <gtsam/base/lieProxies.h>
 #include <gtsam/base/numericalDerivative.h>
-#include <gtsam/base/TestableAssertions.h>
 #include <gtsam/base/testLie.h>
+#include <gtsam/navigation/NavState.h>
 
-#include <CppUnitLite/TestHarness.h>
 #include <cmath>
 
 using namespace std::placeholders;
@@ -69,8 +70,7 @@ TEST(NavState, Concept) {
 
 /* ************************************************************************* */
 TEST(NavState, Constructor) {
-  std::function<NavState(const Rot3&, const Point3&, const Vector3&)> create =
-      std::bind(&NavState::Create, std::placeholders::_1, std::placeholders::_2,
+  auto create = std::bind(&NavState::Create, std::placeholders::_1, std::placeholders::_2,
                 std::placeholders::_3, nullptr, nullptr, nullptr);
   Matrix aH1, aH2, aH3;
   EXPECT(
@@ -89,8 +89,7 @@ assert_equal(
 
 /* ************************************************************************* */
 TEST(NavState, Constructor2) {
-  std::function<NavState(const Pose3&, const Vector3&)> construct =
-      std::bind(&NavState::FromPoseVelocity, std::placeholders::_1,
+  auto construct = std::bind(&NavState::FromPoseVelocity, std::placeholders::_1,
                 std::placeholders::_2, nullptr, nullptr);
   Matrix aH1, aH2;
   EXPECT(
@@ -135,7 +134,7 @@ TEST( NavState, Velocity) {
 /* ************************************************************************* */
 TEST(NavState, PoseJacobian) {
   // NavState::pose() should be a pure projection onto the (R,t) components.
-  std::function<Pose3(const NavState&)> f = [](const NavState& s) {
+  auto f = [](const NavState& s) {
     return s.pose();
   };
 
@@ -168,8 +167,7 @@ TEST( NavState, Manifold ) {
   EXPECT(assert_equal(kZeroXi, kState1.localCoordinates(kState1)));
 
   // Check definition of retract as operating on components separately
-  Vector9 xi;
-  xi << 0.1, 0.1, 0.1, 0.2, 0.3, 0.4, -0.1, -0.2, -0.3;
+  Vector9 xi{0.1, 0.1, 0.1, 0.2, 0.3, 0.4, -0.1, -0.2, -0.3};
   Rot3 drot = Rot3::Expmap(xi.head<3>());
   Point3 dt = Point3(xi.segment<3>(3));
   Velocity3 dvel = Velocity3(-0.1, -0.2, -0.3);
@@ -186,8 +184,7 @@ TEST( NavState, Manifold ) {
   // Check retract derivatives
   Matrix9 aH1, aH2;
   kState1.retract(xi, aH1, aH2);
-  std::function<NavState(const NavState&, const Vector9&)> retract =
-      std::bind(&NavState::retract, std::placeholders::_1,
+  auto retract = std::bind(&NavState::retract, std::placeholders::_1,
                 std::placeholders::_2, nullptr, nullptr);
   EXPECT(assert_equal(numericalDerivative21(retract, kState1, xi), aH1));
   EXPECT(assert_equal(numericalDerivative22(retract, kState1, xi), aH2));
@@ -199,8 +196,7 @@ TEST( NavState, Manifold ) {
   EXPECT(assert_equal(numericalDerivative22(retract, state2, xi2), aH2));
 
   // Check localCoordinates derivatives
-  std::function<Vector9(const NavState&, const NavState&)> local =
-      std::bind(&NavState::localCoordinates, std::placeholders::_1,
+  auto local = std::bind(&NavState::localCoordinates, std::placeholders::_1,
                 std::placeholders::_2, nullptr, nullptr);
   // from state1 to state2
   kState1.localCoordinates(state2, aH1, aH2);
@@ -355,8 +351,7 @@ TEST(NavState, interpolate) {
 
 /* ************************************************************************* */
 static const double dt = 2.0;
-std::function<Vector9(const NavState&, const bool&)> coriolis =
-    std::bind(&NavState::coriolis, std::placeholders::_1, dt, kOmegaCoriolis,
+auto coriolis = std::bind(&NavState::coriolis, std::placeholders::_1, dt, kOmegaCoriolis,
               std::placeholders::_2, nullptr);
 
 TEST(NavState, Coriolis) {
@@ -446,12 +441,10 @@ TEST(NavState, Coriolis4) {
 
 /* ************************************************************************* */
 TEST(NavState, CorrectPIM) {
-  Vector9 xi;
-  xi << 0.1, 0.1, 0.1, 0.2, 0.3, 0.4, -0.1, -0.2, -0.3;
+  Vector9 xi{0.1, 0.1, 0.1, 0.2, 0.3, 0.4, -0.1, -0.2, -0.3};
   double dt = 0.5;
   Matrix9 aH1, aH2;
-  std::function<Vector9(const NavState&, const Vector9&)> correctPIM =
-      std::bind(&NavState::correctPIM, std::placeholders::_1,
+  auto correctPIM = std::bind(&NavState::correctPIM, std::placeholders::_1,
                 std::placeholders::_2, dt, kGravity, kOmegaCoriolis, false,
                 nullptr, nullptr);
   kState1.correctPIM(xi, dt, kGravity, kOmegaCoriolis, false, aH1, aH2);
@@ -535,8 +528,8 @@ TEST(NavState, Expmap_A_Full) {
 /* ************************************************************************* */
 TEST(NavState, Expmap_b) {
   NavState p1(Rot3(), Point3(-100, 0, 0), Point3(100, 0, 0));
-  NavState p2 = p1.retract(
-      (Vector(9) << 0.0, 0.0, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0).finished());
+  NavState p2 =
+      p1.retract(Vector{{0.0, 0.0, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}});
   NavState expected(Rot3::Rodrigues(0.0, 0.0, 0.1), Point3(-100.0, 0.0, 0.0),
                     Point3(100.0, 0.0, 0.0));
   EXPECT(assert_equal(expected, p2));
@@ -546,7 +539,7 @@ TEST(NavState, Expmap_b) {
 // test case for screw motion in the plane
 namespace screwNavState {
 double a = 0.3, c = cos(a), s = sin(a), w = 0.3;
-Vector xi = (Vector(9) << 0.0, 0.0, w, w, 0.0, 1.0, w, 0.0, 1.0).finished();
+Vector xi{{0.0, 0.0, w, w, 0.0, 1.0, w, 0.0, 1.0}};
 Rot3 expectedR(c, -s, 0, s, c, 0, 0, 0, 1);
 Point3 expectedV(0.29552, 0.0446635, 1);
 Point3 expectedP(0.29552, 0.0446635, 1);
@@ -583,8 +576,7 @@ TEST(NavState, Adjoint_compose_full) {
   // To debug derivatives of compose, assert that
   // T1*T2*exp(Adjoint(inv(T2),x) = T1*exp(x)*T2
   const NavState& T1 = T;
-  Vector9 x;
-  x << 0.1, 0.1, 0.1, 0.4, 0.2, 0.8, 0.4, 0.2, 0.8;
+  Vector9 x{0.1, 0.1, 0.1, 0.4, 0.2, 0.8, 0.4, 0.2, 0.8};
   NavState expected = T1 * NavState::Expmap(x) * T2;
   Vector y = T2.inverse().Adjoint(x);
   NavState actual = T1 * T2 * NavState::Expmap(y);
@@ -595,13 +587,12 @@ TEST(NavState, Adjoint_compose_full) {
 TEST(NavState, ExpmapsGaloreFull) {
   Vector xi;
   NavState actual;
-  xi = (Vector(9) << 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9).finished();
+  xi = Vector{{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9}};
   actual = NavState::Expmap(xi);
   EXPECT(assert_equal(expm<NavState>(xi), actual, 1e-6));
   EXPECT(assert_equal(xi, NavState::Logmap(actual), 1e-6));
 
-  xi = (Vector(9) << 0.1, -0.2, 0.3, -0.4, 0.5, -0.6, -0.7, -0.8, -0.9)
-           .finished();
+  xi = Vector{{0.1, -0.2, 0.3, -0.4, 0.5, -0.6, -0.7, -0.8, -0.9}};
   for (double theta = 1.0; 0.3 * theta <= M_PI; theta *= 2) {
     Vector txi = xi * theta;
     actual = NavState::Expmap(txi);
@@ -612,8 +603,7 @@ TEST(NavState, ExpmapsGaloreFull) {
   }
 
   // Works with large v as well, but expm needs 10 iterations!
-  xi =
-      (Vector(9) << 0.2, 0.3, -0.8, 100.0, 120.0, -60.0, 12, 14, 45).finished();
+  xi = Vector{{0.2, 0.3, -0.8, 100.0, 120.0, -60.0, 12, 14, 45}};
   actual = NavState::Expmap(xi);
   EXPECT(assert_equal(expm<NavState>(xi, 10), actual, 1e-5));
   EXPECT(assert_equal(xi, NavState::Logmap(actual), 1e-9));
@@ -632,12 +622,11 @@ TEST(NavState, HatAndVee) {
   EXPECT(assert_equal(v3, NavState::Vee(NavState::Hat(v3))));
 
   // Check the structure of the Lie Algebra element
-  Matrix5 expected;
-  expected << 0, -3, 2, 4, 7,
-    3, 0, -1, 5, 8,
-    -2, 1, 0, 6, 9,
-    0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0;
+  Matrix5 expected{{0, -3, 2, 4, 7},
+                   {3, 0, -1, 5, 8},
+                   {-2, 1, 0, 6, 9},
+                   {0, 0, 0, 0, 0},
+                   {0, 0, 0, 0, 0}};
 
   EXPECT(assert_equal(expected, NavState::Hat(v1)));
 }
@@ -678,8 +667,7 @@ TEST(NavState, Adjoint_hat)
 
 /* ************************************************************************* */
 TEST(NavState, Retract_LocalCoordinates) {
-  Vector9 d;
-  d << 1, 2, 3, 4, 5, 6, 7, 8, 9;
+  Vector9 d{1, 2, 3, 4, 5, 6, 7, 8, 9};
   d /= 10;
   const Rot3 R = Rot3::Retract(d.head<3>());
   NavState t = NavState::Retract(d);
@@ -687,8 +675,7 @@ TEST(NavState, Retract_LocalCoordinates) {
 }
 /* ************************************************************************* */
 TEST(NavState, retract_localCoordinates) {
-  Vector9 d12;
-  d12 << 1, 2, 3, 4, 5, 6, 7, 8, 9;
+  Vector9 d12{1, 2, 3, 4, 5, 6, 7, 8, 9};
   d12 /= 10;
   NavState t1 = T, t2 = t1.retract(d12);
   EXPECT(assert_equal(d12, t1.localCoordinates(t2)));
@@ -729,8 +716,7 @@ TEST(NavState, manifold_expmap) {
 TEST(NavState, subgroups) {
   // Frank - Below only works for correct "Agrawal06iros style expmap
   // lines in canonical coordinates correspond to Abelian subgroups in SE(3)
-  Vector9 d;
-  d << 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9;
+  Vector9 d{{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9}};
   // exp(-d)=inverse(exp(d))
   EXPECT(assert_equal(NavState::Expmap(-d), NavState::Expmap(d).inverse()));
   // exp(5d)=exp(2*d+3*d)=exp(2*d)exp(3*d)=exp(3*d)exp(2*d)
@@ -758,11 +744,10 @@ TEST(NavState, adjointMap) {
 /* ************************************************************************* */
 TEST(NavState, ExpmapDerivative1) {
   Matrix9 actualH;
-  Vector9 w;
-  w << 0.1, 0.2, 0.3, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0;
+  Vector9 w{0.1, 0.2, 0.3, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0};
   NavState::Expmap(w, actualH);
 
-  std::function<NavState(const Vector9&)> f = [](const Vector9& w) {
+  [[maybe_unused]] auto f = [](const Vector9& w) {
     return NavState::Expmap(w);
   };
   Matrix expectedH =
@@ -774,12 +759,11 @@ TEST(NavState, ExpmapDerivative1) {
 /* ************************************************************************* */
 TEST(NavState, LogmapDerivative) {
   Matrix9 actualH;
-  Vector9 w;
-  w << 0.1, 0.2, 0.3, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0;
+  Vector9 w{0.1, 0.2, 0.3, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0};
   NavState p = NavState::Expmap(w);
   EXPECT(assert_equal(w, NavState::Logmap(p, actualH), 1e-5));
 
-  std::function<Vector9(const NavState&)> f = [](const NavState& p) {
+  [[maybe_unused]] auto f = [](const NavState& p) {
     return NavState::Logmap(p);
   };
   Matrix expectedH =
@@ -835,7 +819,7 @@ TEST(NavState, Vec) {
   EXPECT(assert_equal(expected_vec, actual_vec));
 
   // Verify Jacobian with numerical derivatives
-  std::function<Vector25(const NavState&)> f = [](const NavState& p) { return p.vec(); };
+  auto f = [](const NavState& p) { return p.vec(); };
   Eigen::Matrix<double, 25, 9> numericalH = numericalDerivative11<Vector25, NavState>(f, navState);
   EXPECT(assert_equal(numericalH, actualH, 1e-9));
 }
